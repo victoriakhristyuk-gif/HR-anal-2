@@ -34,6 +34,6 @@ function getFilterableQuestions(source) {
 /**
  * Построить отчет
  */
-function buildReportFromSidebar(source, filters) {
-  return buildReport(source, filters);
+function buildReportFromSidebar(source, filters, compareWith2025) {
+  return buildReport(source, filters, compareWith2025);
 }

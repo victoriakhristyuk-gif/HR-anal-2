@@ -4,7 +4,7 @@
  * ==========================================================
  */
 
-function buildReport(source, filters) {
+function buildReport(source, filters, compareWith2025) {
 
   // ==========================================================
   // Загружаем данные
@@ -56,6 +56,68 @@ function buildReport(source, filters) {
   }));
 
   // ==========================================================
+  // Сравнение с 2025 (только когда выбран источник 2026 и
+  // сравнение включено пользователем)
+  // ==========================================================
+
+  const comparisonEnabled = !!compareWith2025 && source === '2026';
+
+  let comparison = null;
+
+  if (comparisonEnabled) {
+
+    const survey2025 = loadSurveyData('2025', true);
+
+    const filteredData2025 = FilterEngine.applyFilters(
+      survey2025.data,
+      survey2025.headers,
+      filters
+    );
+
+    const distributions2025 = Questions.getDistributionQuestions().map(question => ({
+      question: question,
+      items: Statistics.calculateDistribution(
+        filteredData2025,
+        survey2025.headers,
+        question
+      )
+    }));
+
+    // Полные (неусеченные) частоты для вопросов Топ-5 — сравнение
+    // должно строиться по ним, а не по уже обрезанным до 5 позиций
+    // спискам, иначе вариант, выпавший из топа одного года, потеряется.
+    const topAnswerFrequencies2026 = Questions.getTopAnswerQuestions().map(question => ({
+      question: question,
+      frequencies: Statistics.calculateAnswerFrequencies(
+        filteredData,
+        survey.headers,
+        question
+      )
+    }));
+
+    const topAnswerFrequencies2025 = Questions.getTopAnswerQuestions().map(question => ({
+      question: question,
+      frequencies: Statistics.calculateAnswerFrequencies(
+        filteredData2025,
+        survey2025.headers,
+        question
+      )
+    }));
+
+    comparison = Comparison.build(
+      filteredData,
+      survey.headers,
+      filteredData2025,
+      survey2025.headers,
+      distributions,
+      distributions2025,
+      topAnswerFrequencies2026,
+      topAnswerFrequencies2025
+    );
+
+  }
+
+  // ==========================================================
   // Создаем отчет
   // ==========================================================
 
@@ -71,7 +133,8 @@ function buildReport(source, filters) {
       distributions: distributions,
       topAnswers: topAnswers,
       headers: survey.headers,
-      filteredRows: filteredData
+      filteredRows: filteredData,
+      comparison: comparison
     },
     reportName
   );
@@ -80,7 +143,8 @@ function buildReport(source, filters) {
     source: source,
     employees: filteredData.length,
     filters: filters,
-    sheetName: sheet.getName()
+    sheetName: sheet.getName(),
+    comparison: comparison
   };
 
 }

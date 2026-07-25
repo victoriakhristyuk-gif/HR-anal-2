@@ -108,6 +108,15 @@ const ReportBuilder = {
     Formatter.addTableBorder(sheet.getRange("D3:E7"));
 
     // ==========================================================
+    // Сравнение с 2025 (первый этап: минимальный вывод в свободных
+    // ячейках справа, без изменения структуры остального листа)
+    // ==========================================================
+
+    if (reportData.comparison) {
+      this.renderComparison(sheet, reportData.comparison);
+    }
+
+    // ==========================================================
     // Средние оценки
     // ==========================================================
 
@@ -250,6 +259,62 @@ const ReportBuilder = {
     }
 
     return sheet;
+
+  },
+
+  /**
+   * Минимальный вывод сравнения с 2025 в свободных ячейках справа
+   * от блока eNPS (первый этап: без изменения структуры листа).
+   * Значения, которые невозможно рассчитать (нет ответов в одном
+   * из годов), выводятся как "н/д", а не как 0.
+   */
+  renderComparison(sheet, comparison) {
+
+    const formatValue = value => value !== null && value !== undefined ? value : "н/д";
+
+    sheet.getRange("D9").setValue("Сравнение с 2025");
+    Formatter.formatSectionTitle(sheet.getRange("D9"));
+
+    sheet.getRange("D10").setValue("Сотрудников 2026");
+    sheet.getRange("E10").setValue(comparison.employees2026);
+
+    sheet.getRange("D11").setValue("Сотрудников 2025");
+    sheet.getRange("E11").setValue(comparison.employees2025);
+
+    sheet.getRange("D12").setValue("eNPS 2026");
+    sheet.getRange("E12").setValue(formatValue(comparison.enps.value2026));
+
+    sheet.getRange("D13").setValue("eNPS 2025");
+    sheet.getRange("E13").setValue(formatValue(comparison.enps.value2025));
+
+    sheet.getRange("D14").setValue("Динамика eNPS");
+    sheet.getRange("E14").setValue(formatValue(comparison.enps.delta));
+
+    Formatter.addTableBorder(sheet.getRange("D9:E14"));
+
+    const startRow = 16;
+
+    sheet.getRange(startRow, 4).setValue("Вопрос");
+    sheet.getRange(startRow, 5).setValue("2026 / 2025 (Δ)");
+    Formatter.formatTableHeader(sheet.getRange(startRow, 4, 1, 2));
+
+    comparison.averageRatings.forEach((item, index) => {
+
+      const row = startRow + 1 + index;
+
+      sheet.getRange(row, 4).setValue(item.question);
+      sheet.getRange(row, 5).setValue(
+        formatValue(item.value2026) + " / " + formatValue(item.value2025) +
+        " (Δ " + formatValue(item.delta) + ")"
+      );
+
+    });
+
+    if (comparison.averageRatings.length > 0) {
+      Formatter.addTableBorder(
+        sheet.getRange(startRow, 4, comparison.averageRatings.length + 1, 2)
+      );
+    }
 
   },
 

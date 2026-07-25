@@ -89,6 +89,13 @@
       <option value="2025">Ответы 2025</option>
     </select>
 
+    <div id="compareBlock" style="display:none; margin-bottom:12px;">
+      <label style="display:flex; align-items:center; font-weight:normal; margin-bottom:0;">
+        <input type="checkbox" id="compareWith2025" style="width:auto; margin:0 6px 0 0;">
+        Сравнить с 2025
+      </label>
+    </div>
+
     <div class="filters-block">
       <h2>Фильтры</h2>
 
@@ -264,7 +271,25 @@
         document.getElementById('filtersError').textContent = '';
         document.getElementById('filtersError').className = '';
         renderActiveFilters();
+        updateCompareVisibility();
         loadFilterQuestions();
+      }
+
+      /**
+       * "Сравнить с 2025" доступно только для источника 2026.
+       * При переходе на 2025 сравнение принудительно выключается.
+       */
+      function updateCompareVisibility() {
+        var source = document.getElementById('dataSource').value;
+        var compareBlock = document.getElementById('compareBlock');
+        var compareCheckbox = document.getElementById('compareWith2025');
+
+        if (source === '2026') {
+          compareBlock.style.display = '';
+        } else {
+          compareBlock.style.display = 'none';
+          compareCheckbox.checked = false;
+        }
       }
 
       function loadFilterQuestions() {
@@ -293,11 +318,15 @@
       document.getElementById('questionSelect').addEventListener('change', renderFilterEditor);
       document.getElementById('addFilterBtn').addEventListener('click', addFilterFromEditor);
       document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
-      document.getElementById('dataSource').addEventListener('change', loadFilterQuestions);
+      document.getElementById('dataSource').addEventListener('change', function() {
+        updateCompareVisibility();
+        loadFilterQuestions();
+      });
 
       document.getElementById('buildReportBtn').addEventListener('click', function () {
 
         var source = document.getElementById('dataSource').value;
+        var compareWith2025 = document.getElementById('compareWith2025').checked;
         var infoEl = document.getElementById('surveyInfo');
         infoEl.className = '';
         infoEl.textContent = 'Построение отчета...';
@@ -320,7 +349,7 @@
             infoEl.className = 'error';
             infoEl.textContent = error.message;
           })
-          .buildReportFromSidebar(source, activeFilters);
+          .buildReportFromSidebar(source, activeFilters, compareWith2025);
 
       });
 
@@ -346,6 +375,7 @@
           .getSurveyInfo(source);
       });
 
+      updateCompareVisibility();
       loadFilterQuestions();
     </script>
   </body>

@@ -176,22 +176,24 @@ const Statistics = {
   },
 
   /**
-   * ТОП-5 самых популярных ответов на открытый вопрос.
-   * В одной ячейке может быть несколько выбранных вариантов,
-   * склеенных через ".," — они разбираются по отдельности.
-   * При равенстве количества сохраняется порядок появления
-   * в данных (п.17 спеки).
+   * Полные (неусеченные) частоты ответов на открытый вопрос с
+   * множественным выбором, плюс количество валидных ответов на
+   * вопрос (респондентов с непустой ячейкой) — знаменатель для
+   * процентов. В одной ячейке может быть несколько выбранных
+   * вариантов, склеенных через ".," — они разбираются по отдельности,
+   * поэтому сумма count по вариантам может быть больше validCount.
    */
-  calculateTopAnswers(rows, headers, question, limit) {
+  calculateAnswerFrequencies(rows, headers, question) {
 
     const columnIndex = headers.indexOf(question.title);
 
     if (columnIndex === -1) {
-      return [];
+      return { items: [], validCount: 0 };
     }
 
     const items = [];
     const indexByAnswer = {};
+    let validCount = 0;
 
     rows.forEach(row => {
 
@@ -200,6 +202,8 @@ const Statistics = {
       if (raw === "" || raw === null || raw === undefined) {
         return;
       }
+
+      validCount++;
 
       this.parseMultiAnswer_(raw).forEach(answer => {
 
@@ -214,7 +218,20 @@ const Statistics = {
 
     });
 
-    return items
+    return { items: items, validCount: validCount };
+
+  },
+
+  /**
+   * ТОП-5 самых популярных ответов на открытый вопрос.
+   * При равенстве количества сохраняется порядок появления
+   * в данных (п.17 спеки).
+   */
+  calculateTopAnswers(rows, headers, question, limit) {
+
+    const frequencies = this.calculateAnswerFrequencies(rows, headers, question);
+
+    return frequencies.items
       .slice()
       .sort((a, b) => b.count - a.count)
       .slice(0, limit || 5);
