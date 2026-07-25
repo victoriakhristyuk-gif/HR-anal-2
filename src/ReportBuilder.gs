@@ -6,6 +6,19 @@
 
 const ReportBuilder = {
 
+  // Порог нерепрезентативности выборки (UX-правило проекта, не
+  // статистический расчет). При сравнении проверяется меньшая из
+  // выборок 2026/2025 — именно она ограничивает надежность сравнения.
+  SMALL_SAMPLE_THRESHOLD: 5,
+
+  // UX-пороги для подсветки динамики (эвристика для визуального
+  // выделения "заметных" изменений, НЕ статистическая значимость).
+  // Значения относятся к предметной области отчета, поэтому живут
+  // здесь, а не в Formatter — Formatter только умеет красить диапазон
+  // по переданному порогу, не зная, откуда порог взялся.
+  DELTA_THRESHOLD_RATING: 0.3,   // средние оценки (шкала 1-5), баллы
+  DELTA_THRESHOLD_PERCENT: 5,    // eNPS/распределения/Top-5, п.п.
+
   createReport(reportData, reportName) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -15,305 +28,773 @@ const ReportBuilder = {
 
     const sheet = ss.insertSheet(uniqueName);
 
-    // ==========================================================
-    // Оформление
-    // ==========================================================
-
-    Formatter.applyBaseFont(sheet.getRange("A1:E50"));
-
-    Formatter.formatMainTitle(sheet.getRange("A1"));
-
-    Formatter.formatLabel(sheet.getRange("A2"));
-    Formatter.formatLabel(sheet.getRange("A4"));
-    Formatter.formatLabel(sheet.getRange("A6"));
-
-    Formatter.setColumnWidths(sheet, [220, 350, null, 180, 180]);
-
-    // ==========================================================
-    // Заголовок
-    // ==========================================================
-
-    sheet.getRange("A1").setValue("HR Analytics");
-
-    sheet.getRange("A2").setValue("Количество сотрудников:");
-    sheet.getRange("B2").setValue(reportData.employees);
-
-    sheet.getRange("A4").setValue("Источник:");
-    sheet.getRange("B4").setValue(reportData.source);
-
-    // ==========================================================
-    // Паспорт выборки
-    // ==========================================================
-
-    sheet.getRange("A6").setValue("Паспорт выборки:");
-
-    const passport = reportData.filters
-      .filter(filter => this.hasFilterValue(filter))
-      .map(filter => this.formatFilterForPassport(filter));
-
-    sheet.getRange("A7").setValue(passport.join("; "));
-
-    // ==========================================================
-    // Содержание
-    // ==========================================================
-
-    sheet.getRange("A9").setValue("Содержание");
-    Formatter.formatSectionTitle(sheet.getRange("A9"));
-
-    sheet.getRange("A10").setValue("eNPS");
-    sheet.getRange("A11").setValue("Самые большие изменения");
-    sheet.getRange("A12").setValue("Средние оценки");
-    sheet.getRange("A13").setValue("Распределение ответов");
-    sheet.getRange("A14").setValue("TOP-5 открытых ответов");
-    sheet.getRange("A15").setValue("Сырые данные");
-
-    // ==========================================================
-    // eNPS
-    // ==========================================================
-
-    sheet.getRange("D1").setValue("eNPS");
-    Formatter.formatSectionTitle(sheet.getRange("D1"));
-
-    sheet.getRange("D3").setValue("Промоутеры");
-    sheet.getRange("D4").setValue("Нейтралы");
-    sheet.getRange("D5").setValue("Критики");
-
-    sheet.getRange("E3").setValue(
-      reportData.enps.promoters +
-      " (" +
-      reportData.enps.promotersPercent +
-      "%)"
-    );
-
-    sheet.getRange("E4").setValue(
-      reportData.enps.neutrals +
-      " (" +
-      reportData.enps.neutralsPercent +
-      "%)"
-    );
-
-    sheet.getRange("E5").setValue(
-      reportData.enps.detractors +
-      " (" +
-      reportData.enps.detractorsPercent +
-      "%)"
-    );
-
-    sheet.getRange("D7").setValue("eNPS");
-    Formatter.formatLabel(sheet.getRange("D7"));
-
-    sheet.getRange("E7").setValue(reportData.enps.enps);
-    Formatter.formatHighlightNumber(sheet.getRange("E7"));
-
-    Formatter.addTableBorder(sheet.getRange("D3:E7"));
-
-    // ==========================================================
-    // Сравнение с 2025 (первый этап: минимальный вывод в свободных
-    // ячейках справа, без изменения структуры остального листа)
-    // ==========================================================
-
-    if (reportData.comparison) {
-      this.renderComparison(sheet, reportData.comparison);
-    }
-
-    // ==========================================================
-    // Средние оценки
-    // ==========================================================
-
-    const averageStartRow = 17;
-
-    sheet.getRange(averageStartRow, 1).setValue("Средние оценки");
-    Formatter.formatSectionTitle(sheet.getRange(averageStartRow, 1));
-
-    sheet.getRange(averageStartRow + 1, 1).setValue("Вопрос");
-    sheet.getRange(averageStartRow + 1, 2).setValue("Среднее");
-
-    Formatter.formatTableHeader(
-      sheet.getRange(averageStartRow + 1, 1, 1, 2)
-    );
-
-    const averageRatings = reportData.averageRatings;
-
-    averageRatings.forEach((item, index) => {
-      const row = averageStartRow + 2 + index;
-      sheet.getRange(row, 1).setValue(item.question);
-      sheet.getRange(row, 2).setValue(item.average);
-    });
-
-    if (averageRatings.length > 0) {
-      Formatter.addTableBorder(
-        sheet.getRange(averageStartRow + 1, 1, averageRatings.length + 1, 2)
-      );
-    }
-
-    // ==========================================================
-    // Распределение ответов
-    // ==========================================================
-
-    let currentRow = averageStartRow + averageRatings.length + 3;
-
-    reportData.distributions.forEach(distribution => {
-
-      const question = distribution.question;
-
-      // Для Города и Отдела показываем только реально
-      // встретившиеся значения, для остальных — полный список
-      const hideEmpty = question.title === "Город" || question.title === "Отдел";
-
-      const items = hideEmpty
-        ? distribution.items.filter(item => item.count > 0)
-        : distribution.items;
-
-      sheet.getRange(currentRow, 1).setValue(question.title);
-      Formatter.formatSectionTitle(sheet.getRange(currentRow, 1));
-
-      const headerRow = currentRow + 1;
-
-      sheet.getRange(headerRow, 1).setValue("Ответ");
-      sheet.getRange(headerRow, 2).setValue("Количество");
-      sheet.getRange(headerRow, 3).setValue("Процент");
-
-      Formatter.formatTableHeader(sheet.getRange(headerRow, 1, 1, 3));
-
-      items.forEach((item, index) => {
-        const row = headerRow + 1 + index;
-        sheet.getRange(row, 1).setValue(item.answer);
-        sheet.getRange(row, 2).setValue(item.count);
-        sheet.getRange(row, 3).setValue(item.percent + "%");
-      });
-
-      if (items.length > 0) {
-        Formatter.addTableBorder(
-          sheet.getRange(headerRow, 1, items.length + 1, 3)
-        );
-      }
-
-      currentRow = headerRow + items.length + 2;
-
-    });
-
-    // ==========================================================
-    // TOP-5 открытых ответов
-    // ==========================================================
-
-    reportData.topAnswers.forEach(topAnswer => {
-
-      const question = topAnswer.question;
-      const items = topAnswer.items;
-
-      sheet.getRange(currentRow, 1).setValue(question.title);
-      Formatter.formatSectionTitle(sheet.getRange(currentRow, 1));
-
-      const headerRow = currentRow + 1;
-
-      sheet.getRange(headerRow, 1).setValue("Ответ");
-      sheet.getRange(headerRow, 2).setValue("Количество");
-
-      Formatter.formatTableHeader(sheet.getRange(headerRow, 1, 1, 2));
-
-      items.forEach((item, index) => {
-        const row = headerRow + 1 + index;
-        sheet.getRange(row, 1).setValue(item.answer);
-        sheet.getRange(row, 2).setValue(item.count);
-      });
-
-      if (items.length > 0) {
-        Formatter.addTableBorder(
-          sheet.getRange(headerRow, 1, items.length + 1, 2)
-        );
-      }
-
-      currentRow = headerRow + items.length + 2;
-
-    });
-
-    // ==========================================================
-    // Сырые данные
-    // ==========================================================
-
-    sheet.getRange(currentRow, 1).setValue("Сырые данные");
-    Formatter.formatSectionTitle(sheet.getRange(currentRow, 1));
-
-    const rawHeaders = reportData.headers;
-    const rawRows = reportData.filteredRows;
-    const rawHeaderRow = currentRow + 1;
-
-    sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length).setValues([rawHeaders]);
-    Formatter.formatTableHeader(
-      sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length)
-    );
-
-    if (rawRows.length > 0) {
-
-      sheet.getRange(
-        rawHeaderRow + 1,
-        1,
-        rawRows.length,
-        rawHeaders.length
-      ).setValues(rawRows);
-
-      Formatter.addTableBorder(
-        sheet.getRange(rawHeaderRow, 1, rawRows.length + 1, rawHeaders.length)
-      );
-
-    }
+    Formatter.applyBaseFont(sheet.getRange("A1:F50"));
+    Formatter.setColumnWidths(sheet, [320, 110, 110, 110, 110, 110]);
+
+    // ctx.row — "курсор" текущей свободной строки. Каждый render-метод
+    // дописывает свой блок начиная с ctx.row и сам сдвигает его дальше,
+    // поэтому блоки верхней части листа можно переставлять местами, не
+    // пересчитывая номера строк вручную.
+    const ctx = { sheet: sheet, row: 1 };
+
+    this.renderHeader_(ctx, reportData);
+    this.renderPassport_(ctx, reportData);
+    this.renderSampleWarning_(ctx, reportData);
+
+    // Замораживаем строки заголовка/паспорта/предупреждения (без
+    // хвостовой пустой строки-разделителя) — они остаются на виду при
+    // прокрутке остальной, гораздо более длинной, части отчета.
+    const frozenRows = ctx.row - 1;
+
+    this.renderExecutiveSummary_(ctx, reportData);
+    this.renderKeyIndicators_(ctx, reportData);
+    this.renderDetailedAnalytics_(ctx, reportData);
+    this.renderRawData_(ctx, reportData);
+
+    Formatter.freezeHeader(sheet, frozenRows, 1);
 
     return sheet;
 
   },
 
   /**
-   * Минимальный вывод сравнения с 2025 в свободных ячейках справа
-   * от блока eNPS (первый этап: без изменения структуры листа).
-   * Значения, которые невозможно рассчитать (нет ответов в одном
-   * из годов), выводятся как "н/д", а не как 0.
+   * Заголовок отчета: название + год источника, с пометкой о
+   * включенном сравнении с 2025, если оно есть.
    */
-  renderComparison(sheet, comparison) {
+  renderHeader_(ctx, reportData) {
 
-    const formatValue = value => value !== null && value !== undefined ? value : "н/д";
+    const sheet = ctx.sheet;
+    const compareLabel = reportData.comparison ? " (сравнение с 2025)" : "";
 
-    sheet.getRange("D9").setValue("Сравнение с 2025");
-    Formatter.formatSectionTitle(sheet.getRange("D9"));
+    sheet.getRange(ctx.row, 1).setValue(
+      "HR Analytics — " + reportData.source + compareLabel
+    );
+    Formatter.formatMainTitle(sheet.getRange(ctx.row, 1));
 
-    sheet.getRange("D10").setValue("Сотрудников 2026");
-    sheet.getRange("E10").setValue(comparison.employees2026);
+    ctx.row += 1;
 
-    sheet.getRange("D11").setValue("Сотрудников 2025");
-    sheet.getRange("E11").setValue(comparison.employees2025);
+  },
 
-    sheet.getRange("D12").setValue("eNPS 2026");
-    sheet.getRange("E12").setValue(formatValue(comparison.enps.value2026));
+  /**
+   * Паспорт выборки: источник, примененные фильтры, размер(ы) выборки.
+   */
+  renderPassport_(ctx, reportData) {
 
-    sheet.getRange("D13").setValue("eNPS 2025");
-    sheet.getRange("E13").setValue(formatValue(comparison.enps.value2025));
+    const sheet = ctx.sheet;
 
-    sheet.getRange("D14").setValue("Динамика eNPS");
-    sheet.getRange("E14").setValue(formatValue(comparison.enps.delta));
+    const activeFilters = reportData.filters
+      .filter(filter => this.hasFilterValue(filter))
+      .map(filter => this.formatFilterForPassport(filter));
 
-    Formatter.addTableBorder(sheet.getRange("D9:E14"));
+    const filtersText = activeFilters.length > 0
+      ? activeFilters.join("; ")
+      : "без фильтров";
 
-    const startRow = 16;
+    sheet.getRange(ctx.row, 1).setValue(
+      "Источник: " + reportData.source + " · Фильтры: " + filtersText
+    );
+    ctx.row += 1;
 
-    sheet.getRange(startRow, 4).setValue("Вопрос");
-    sheet.getRange(startRow, 5).setValue("2026 / 2025 (Δ)");
-    Formatter.formatTableHeader(sheet.getRange(startRow, 4, 1, 2));
+    const sampleText = reportData.comparison
+      ? "Размер выборки: 2026 — n=" + reportData.employees +
+        "; 2025 — n=" + reportData.comparison.employees2025
+      : "Размер выборки: n=" + reportData.employees;
 
-    comparison.averageRatings.forEach((item, index) => {
+    sheet.getRange(ctx.row, 1).setValue(sampleText);
+    ctx.row += 1;
 
-      const row = startRow + 1 + index;
+    ctx.row += 1; // пустая строка-разделитель
 
-      sheet.getRange(row, 4).setValue(item.question);
-      sheet.getRange(row, 5).setValue(
-        formatValue(item.value2026) + " / " + formatValue(item.value2025) +
-        " (Δ " + formatValue(item.delta) + ")"
+  },
+
+  /**
+   * Предупреждение о нерепрезентативной выборке (n < порога). Данные
+   * при этом не скрываются — баннер только привлекает внимание.
+   */
+  renderSampleWarning_(ctx, reportData) {
+
+    const sheet = ctx.sheet;
+
+    const minSample = reportData.comparison
+      ? Math.min(reportData.employees, reportData.comparison.employees2025)
+      : reportData.employees;
+
+    if (minSample >= this.SMALL_SAMPLE_THRESHOLD) {
+      return;
+    }
+
+    const range = sheet.getRange(ctx.row, 1, 1, 3);
+
+    range.setValue(
+      "⚠ Выборка нерепрезентативна (n=" + minSample + " < " + this.SMALL_SAMPLE_THRESHOLD +
+      ") — данные приведены, но интерпретируйте их с осторожностью"
+    );
+    Formatter.formatWarningBanner(range);
+
+    ctx.row += 1;
+    ctx.row += 1; // пустая строка-разделитель
+
+  },
+
+  /**
+   * Executive Summary — компактное текстовое представление уже
+   * посчитанных данных (eNPS, средние оценки, их динамика), без
+   * новых показателей и без новой аналитики. Состав зафиксирован
+   * макетом V3.
+   */
+  renderExecutiveSummary_(ctx, reportData) {
+
+    const sheet = ctx.sheet;
+
+    sheet.getRange(ctx.row, 1).setValue("EXECUTIVE SUMMARY");
+    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    ctx.row += 1;
+
+    sheet.getRange(ctx.row, 1).setValue(this.buildEnpsSummaryLine_(reportData));
+    ctx.row += 1;
+
+    const sortedDesc = reportData.averageRatings.slice().sort((a, b) => b.average - a.average);
+    const sortedAsc = reportData.averageRatings.slice().sort((a, b) => a.average - b.average);
+
+    sheet.getRange(ctx.row, 1).setValue(
+      "Самые высокие показатели: " + this.formatRatingList_(sortedDesc.slice(0, 3))
+    );
+    ctx.row += 1;
+
+    sheet.getRange(ctx.row, 1).setValue(
+      "Самые низкие показатели: " + this.formatRatingList_(sortedAsc.slice(0, 3))
+    );
+    ctx.row += 1;
+
+    if (reportData.comparison) {
+      sheet.getRange(ctx.row, 1).setValue(this.buildDynamicsSummaryLine_(reportData));
+      ctx.row += 1;
+    }
+
+    ctx.row += 1; // пустая строка-разделитель
+
+  },
+
+  /**
+   * "Вопрос — X.X   Вопрос2 — X.X" для списка средних оценок
+   */
+  formatRatingList_(items) {
+    return items.map(item => item.question + " — " + item.average).join("   ");
+  },
+
+  /**
+   * Строка eNPS для Executive Summary: значение (+ динамика к 2025,
+   * если сравнение включено).
+   */
+  buildEnpsSummaryLine_(reportData) {
+
+    const enps = reportData.enps.enps;
+
+    if (!reportData.comparison) {
+      return "eNPS: " + enps;
+    }
+
+    const comparisonEnps = reportData.comparison.enps;
+
+    if (comparisonEnps.delta === null || comparisonEnps.value2025 === null) {
+      return "eNPS: " + enps + " (нет данных 2025 для сравнения)";
+    }
+
+    return "eNPS: " + enps + " (" + this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
+      " к 2025: " + comparisonEnps.value2025 + ")";
+
+  },
+
+  /**
+   * Строка "Динамика" для Executive Summary: eNPS + самые заметные
+   * изменения средних оценок (выше UX-порога DELTA_THRESHOLD_RATING).
+   * Если ни один вопрос порог не превышает — явный текст об этом,
+   * а не подобранное "на всякий случай" значение.
+   */
+  buildDynamicsSummaryLine_(reportData) {
+
+    const movers = reportData.comparison.averageRatings
+      .filter(item => item.delta !== null && Math.abs(item.delta) >= this.DELTA_THRESHOLD_RATING)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+    if (movers.length === 0) {
+      return "Динамика: существенных изменений в средних оценках не выявлено";
+    }
+
+    const top = movers.slice(0, 3)
+      .map(item => item.question + " " + this.formatSignedDelta_(item.delta, ""))
+      .join("   ");
+
+    return "Динамика: " + top;
+
+  },
+
+  /**
+   * Текстовое представление дельты со стрелкой и знаком (для строк
+   * Executive Summary, которые пишутся обычным текстом, а не через
+   * Formatter.applyDeltaNumberFormat — там нет числовой ячейки).
+   */
+  formatSignedDelta_(delta, suffix) {
+
+    const arrow = delta > 0 ? "▲" : (delta < 0 ? "▼" : "–");
+    const sign = delta > 0 ? "+" : "";
+
+    return arrow + " " + sign + delta + suffix;
+
+  },
+
+  /**
+   * Ключевые показатели: eNPS-карточка и ранжированный обзор всех
+   * средних оценок — единственная "приборная панель" отчета. Дальше
+   * идет только детальная аналитика по смысловым секциям анкеты
+   * (следующие подэтапы).
+   */
+  renderKeyIndicators_(ctx, reportData) {
+
+    const sheet = ctx.sheet;
+
+    sheet.getRange(ctx.row, 1).setValue("КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ");
+    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    ctx.row += 1;
+
+    this.renderEnpsIndicator_(ctx, reportData);
+    ctx.row += 1; // пустая строка-разделитель
+
+    this.renderAverageOverview_(ctx, reportData);
+    ctx.row += 1; // пустая строка-разделитель
+
+  },
+
+  /**
+   * eNPS-карточка: промоутеры/нейтралы/критики и итог за 2026, плюс
+   * итог 2025 и динамика, если сравнение включено. Разбивки
+   * промоутеры/нейтралы/критики за 2025 сейчас нет в Comparison.gs —
+   * решено пока показывать по 2025 только итоговое значение eNPS.
+   */
+  renderEnpsIndicator_(ctx, reportData) {
+
+    const sheet = ctx.sheet;
+    const enps = reportData.enps;
+    const comparisonEnps = reportData.comparison ? reportData.comparison.enps : null;
+
+    const headerRow = ctx.row;
+
+    sheet.getRange(headerRow, 1).setValue("Показатель");
+    sheet.getRange(headerRow, 2).setValue("2026, кол-во");
+    sheet.getRange(headerRow, 3).setValue("2026, %");
+
+    if (comparisonEnps) {
+      sheet.getRange(headerRow, 4).setValue("2025");
+      sheet.getRange(headerRow, 6).setValue("Δ");
+    }
+
+    const width = comparisonEnps ? 6 : 3;
+    Formatter.formatTableHeader(sheet.getRange(headerRow, 1, 1, width));
+    ctx.row += 1;
+
+    const categoryRows = [
+      { label: "eNPS — Промоутеры", count: enps.promoters, percent: enps.promotersPercent },
+      { label: "eNPS — Нейтралы", count: enps.neutrals, percent: enps.neutralsPercent },
+      { label: "eNPS — Критики", count: enps.detractors, percent: enps.detractorsPercent }
+    ];
+
+    categoryRows.forEach(item => {
+      sheet.getRange(ctx.row, 1).setValue(item.label);
+      sheet.getRange(ctx.row, 2).setValue(item.count);
+      sheet.getRange(ctx.row, 3).setValue(item.percent + "%");
+      ctx.row += 1;
+    });
+
+    const totalRow = ctx.row;
+
+    sheet.getRange(totalRow, 1).setValue("eNPS — итог");
+    sheet.getRange(totalRow, 2).setValue(enps.enps);
+    Formatter.formatHighlightNumber(sheet.getRange(totalRow, 2));
+
+    if (comparisonEnps) {
+
+      sheet.getRange(totalRow, 4).setValue(
+        comparisonEnps.value2025 !== null ? comparisonEnps.value2025 : "н/д"
       );
+
+      if (comparisonEnps.delta !== null) {
+
+        const deltaCell = sheet.getRange(totalRow, 6);
+        deltaCell.setValue(comparisonEnps.delta);
+        Formatter.applyDeltaNumberFormat(deltaCell, " п.п.");
+        Formatter.applyDeltaHighlighting(sheet, deltaCell, this.DELTA_THRESHOLD_PERCENT);
+
+      } else {
+        sheet.getRange(totalRow, 6).setValue("н/д");
+      }
+
+    }
+
+    ctx.row += 1;
+
+    Formatter.addTableBorder(
+      sheet.getRange(headerRow, 1, totalRow - headerRow + 1, width)
+    );
+
+  },
+
+  /**
+   * Обзор средних оценок: все rating5-вопросы, отсортированные по
+   * убыванию (2026), с 2025 и динамикой при включенном сравнении, плюс
+   * один горизонтальный график той же ранжированной выборки.
+   */
+  renderAverageOverview_(ctx, reportData) {
+
+    const sheet = ctx.sheet;
+    const hasComparison = !!reportData.comparison;
+    const rows = this.buildAverageOverviewRows_(reportData);
+
+    sheet.getRange(ctx.row, 1).setValue("Средние оценки — обзор");
+    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    ctx.row += 1;
+
+    const headerRow = ctx.row;
+    const width = hasComparison ? 4 : 2;
+
+    sheet.getRange(headerRow, 1).setValue("Вопрос");
+    sheet.getRange(headerRow, 2).setValue("2026");
+
+    if (hasComparison) {
+      sheet.getRange(headerRow, 3).setValue("2025");
+      sheet.getRange(headerRow, 4).setValue("Δ");
+    }
+
+    Formatter.formatTableHeader(sheet.getRange(headerRow, 1, 1, width));
+    ctx.row += 1;
+
+    const firstDataRow = ctx.row;
+    const formatNullable = value => value !== null && value !== undefined ? value : "н/д";
+
+    rows.forEach((item, index) => {
+
+      const row = firstDataRow + index;
+
+      sheet.getRange(row, 1).setValue(item.question);
+      sheet.getRange(row, 2).setValue(formatNullable(item.value2026));
+
+      if (hasComparison) {
+        sheet.getRange(row, 3).setValue(formatNullable(item.value2025));
+        sheet.getRange(row, 4).setValue(formatNullable(item.delta));
+      }
 
     });
 
-    if (comparison.averageRatings.length > 0) {
-      Formatter.addTableBorder(
-        sheet.getRange(startRow, 4, comparison.averageRatings.length + 1, 2)
+    if (rows.length === 0) {
+      ctx.row = firstDataRow;
+      return;
+    }
+
+    Formatter.addTableBorder(sheet.getRange(headerRow, 1, rows.length + 1, width));
+
+    Formatter.applyColorScale(
+      sheet,
+      sheet.getRange(firstDataRow, 2, rows.length, 1),
+      "#f4cccc", "#fff2cc", "#d9ead3"
+    );
+
+    if (hasComparison) {
+      const deltaRange = sheet.getRange(firstDataRow, 4, rows.length, 1);
+      Formatter.applyDeltaNumberFormat(deltaRange, "");
+      Formatter.applyDeltaHighlighting(sheet, deltaRange, this.DELTA_THRESHOLD_RATING);
+    }
+
+    ctx.row = firstDataRow + rows.length + 1;
+
+    this.insertAverageOverviewChart_(ctx, rows, firstDataRow, hasComparison);
+
+  },
+
+  /**
+   * Подготовить строки для обзора средних оценок: вопрос, значение
+   * 2026[, 2025, дельта], отсортировано по убыванию 2026. Источник —
+   * уже посчитанные reportData.averageRatings /
+   * reportData.comparison.averageRatings, новых расчетов нет.
+   */
+  buildAverageOverviewRows_(reportData) {
+
+    if (reportData.comparison) {
+
+      return reportData.comparison.averageRatings
+        .map(item => ({
+          question: item.question,
+          value2026: item.value2026,
+          value2025: item.value2025,
+          delta: item.delta
+        }))
+        .sort((a, b) => (b.value2026 ?? -Infinity) - (a.value2026 ?? -Infinity));
+
+    }
+
+    return reportData.averageRatings
+      .map(item => ({ question: item.question, value2026: item.average, value2025: null, delta: null }))
+      .sort((a, b) => b.value2026 - a.value2026);
+
+  },
+
+  /**
+   * Один горизонтальный график для ранжированного обзора средних
+   * оценок — данные берутся из уже записанных на лист ячеек (та же
+   * таблица), чтобы график и таблица гарантированно не расходились.
+   */
+  insertAverageOverviewChart_(ctx, rows, firstDataRow, hasComparison) {
+
+    const sheet = ctx.sheet;
+    const numColumns = hasComparison ? 3 : 2; // Вопрос + 2026[ + 2025]
+
+    const dataRange = sheet.getRange(firstDataRow, 1, rows.length, numColumns);
+    const chartHeight = Math.max(300, rows.length * 22);
+
+    const chart = sheet.newChart()
+      .setChartType(Charts.ChartType.BAR)
+      .addRange(dataRange)
+      .setOption("title", "Средние оценки" + (hasComparison ? " — 2026 vs 2025" : ""))
+      .setOption("legend", { position: hasComparison ? "top" : "none" })
+      .setOption("height", chartHeight)
+      .setPosition(ctx.row, 1, 0, 0)
+      .build();
+
+    sheet.insertChart(chart);
+
+    ctx.row += Math.ceil(chartHeight / 21) + 2;
+
+  },
+
+  /**
+   * Детальная аналитика по смысловым секциям анкеты (ReportSections.gs).
+   * Секции отличаются только составом вопросов и заголовком — поэтому
+   * все шесть секций рендерятся одним и тем же методом (renderSection_),
+   * а не отдельной функцией на каждую.
+   */
+  renderDetailedAnalytics_(ctx, reportData) {
+
+    ReportSections.validate();
+
+    const sheet = ctx.sheet;
+    const hasComparison = !!reportData.comparison;
+    const lookups = this.buildDetailLookups_(reportData);
+
+    sheet.getRange(ctx.row, 1).setValue("ДЕТАЛЬНАЯ АНАЛИТИКА ПО СМЫСЛОВЫМ БЛОКАМ АНКЕТЫ");
+    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    ctx.row += 1;
+    ctx.row += 1; // пустая строка-разделитель
+
+    ReportSections.getSections().forEach(section => {
+      this.renderSection_(ctx, section, lookups, hasComparison);
+      ctx.row += 1; // разделитель между секциями
+    });
+
+  },
+
+  /**
+   * Быстрые словари "вопрос -> уже посчитанные данные" по названию —
+   * без повторных расчетов, только группировка того, что уже есть в
+   * reportData/reportData.comparison.
+   */
+  buildDetailLookups_(reportData) {
+
+    const byQuestionTitle = list => {
+      const map = {};
+      list.forEach(entry => { map[entry.question.title] = entry; });
+      return map;
+    };
+
+    const averages = {};
+    reportData.averageRatings.forEach(item => { averages[item.question] = item; });
+
+    const comparisonAverages = {};
+    if (reportData.comparison) {
+      reportData.comparison.averageRatings.forEach(item => { comparisonAverages[item.question] = item; });
+    }
+
+    return {
+      distributions: byQuestionTitle(reportData.distributions),
+      comparisonDistributions: reportData.comparison ? byQuestionTitle(reportData.comparison.distributions) : {},
+      topAnswers: byQuestionTitle(reportData.topAnswers),
+      comparisonTopAnswers: reportData.comparison ? byQuestionTitle(reportData.comparison.topAnswers) : {},
+      averages: averages,
+      comparisonAverages: comparisonAverages
+    };
+
+  },
+
+  /**
+   * Одна смысловая секция (например "Офис"): заголовок-саммари в виде
+   * сворачиваемой группы, внутри — по очереди все вопросы секции.
+   */
+  renderSection_(ctx, section, lookups, hasComparison) {
+
+    const sheet = ctx.sheet;
+    const sectionStartRow = ctx.row;
+
+    sheet.getRange(ctx.row, 1).setValue(
+      section.name + " — " + section.questions.length + " " +
+      this.pluralizeRu_(section.questions.length, ["вопрос", "вопроса", "вопросов"])
+    );
+    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    ctx.row += 1;
+
+    section.questions.forEach(question => {
+      this.renderQuestionBlock_(ctx, question, section, lookups, hasComparison);
+    });
+
+    const sectionContentRows = ctx.row - 1 - sectionStartRow;
+
+    if (sectionContentRows > 0) {
+      Formatter.groupRows(sheet, sectionStartRow + 1, sectionContentRows, true);
+    }
+
+  },
+
+  /**
+   * Склонение русского существительного по числу: forms = [1, 2-4, 5+],
+   * например ["вопрос", "вопроса", "вопросов"] или ["строка", "строки", "строк"].
+   */
+  pluralizeRu_(count, forms) {
+
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+
+    if (mod10 === 1 && mod100 !== 11) {
+      return forms[0];
+    }
+
+    if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) {
+      return forms[1];
+    }
+
+    return forms[2];
+
+  },
+
+  /**
+   * Один вопрос внутри секции: инлайн-среднее (только для rating5) +
+   * таблица ответов — полное распределение для вопросов-шкал/single,
+   * либо топ-ответы для вопросов с display "Топ 5". Единый метод для
+   * обоих случаев — различается только источник данных (lookups).
+   */
+  renderQuestionBlock_(ctx, question, section, lookups, hasComparison) {
+
+    const sheet = ctx.sheet;
+    const questionStartRow = ctx.row;
+
+    sheet.getRange(ctx.row, 1).setValue(question.title);
+    Formatter.formatLabel(sheet.getRange(ctx.row, 1));
+    ctx.row += 1;
+
+    if (question.average) {
+      this.renderInlineAverage_(ctx, question, lookups, hasComparison);
+    }
+
+    const isTopAnswers = question.display === "Топ 5";
+
+    const entry2026 = isTopAnswers
+      ? lookups.topAnswers[question.title]
+      : lookups.distributions[question.title];
+
+    const comparisonEntry = isTopAnswers
+      ? lookups.comparisonTopAnswers[question.title]
+      : lookups.comparisonDistributions[question.title];
+
+    let items = (hasComparison && comparisonEntry)
+      ? comparisonEntry.items
+      : (entry2026 ? entry2026.items : []).map(item => ({
+          answer: item.answer,
+          count2026: item.count,
+          percent2026: item.percent
+        }));
+
+    // Город/Отдел — по частоте (убывание) и без нулевых значений;
+    // остальные вопросы сохраняют фиксированный порядок анкеты/шкалы.
+    if (section.sortByFrequency.indexOf(question.title) !== -1) {
+      items = items
+        .filter(item => item.count2026 > 0)
+        .slice()
+        .sort((a, b) => b.count2026 - a.count2026);
+    }
+
+    const hasPercent = hasComparison || !isTopAnswers;
+
+    this.renderAnswerTable_(ctx, items, hasComparison, hasPercent);
+
+    const questionContentRows = ctx.row - 1 - questionStartRow;
+
+    if (questionContentRows > 0) {
+      Formatter.groupRows(sheet, questionStartRow + 1, questionContentRows, true);
+    }
+
+    ctx.row += 1; // разделитель между вопросами
+
+  },
+
+  /**
+   * Строка со средней оценкой вопроса (только rating5) — то же
+   * значение, что уже показано в "Средние оценки — обзор", здесь оно
+   * повторяется для контекста внутри своей секции анкеты.
+   */
+  renderInlineAverage_(ctx, question, lookups, hasComparison) {
+
+    const sheet = ctx.sheet;
+
+    if (hasComparison) {
+
+      const item = lookups.comparisonAverages[question.title];
+
+      if (!item) {
+        return;
+      }
+
+      const value2026 = item.value2026 !== null ? item.value2026 : "н/д";
+
+      sheet.getRange(ctx.row, 1).setValue(
+        item.delta !== null
+          ? "Среднее: " + value2026 + " (2025: " + item.value2025 + ", " + this.formatSignedDelta_(item.delta, "") + ")"
+          : "Среднее: " + value2026
       );
+
+    } else {
+
+      const item = lookups.averages[question.title];
+
+      if (!item) {
+        return;
+      }
+
+      sheet.getRange(ctx.row, 1).setValue("Среднее: " + item.average);
+
+    }
+
+    ctx.row += 1;
+
+  },
+
+  /**
+   * Таблица "Ответ | 2026 кол-во | 2026 % | 2025 кол-во | 2025 % | Δ" —
+   * общая для распределений и Топ-5, колонки процента/сравнения
+   * появляются только если для них есть данные (hasPercent/hasComparison).
+   */
+  renderAnswerTable_(ctx, items, hasComparison, hasPercent) {
+
+    const sheet = ctx.sheet;
+    const headerRow = ctx.row;
+
+    sheet.getRange(headerRow, 1).setValue("Ответ");
+    sheet.getRange(headerRow, 2).setValue("2026, кол-во");
+
+    let width = 2;
+
+    if (hasPercent) {
+      sheet.getRange(headerRow, 3).setValue("2026, %");
+      width = 3;
+    }
+
+    if (hasComparison) {
+      sheet.getRange(headerRow, 4).setValue("2025, кол-во");
+      if (hasPercent) {
+        sheet.getRange(headerRow, 5).setValue("2025, %");
+      }
+      sheet.getRange(headerRow, 6).setValue("Δ");
+      width = 6;
+    }
+
+    Formatter.formatTableHeader(sheet.getRange(headerRow, 1, 1, width));
+    ctx.row += 1;
+
+    const firstDataRow = ctx.row;
+    const formatNullable = value => value !== null && value !== undefined ? value : "н/д";
+
+    items.forEach((item, index) => {
+
+      const row = firstDataRow + index;
+
+      sheet.getRange(row, 1).setValue(item.answer);
+      sheet.getRange(row, 2).setValue(item.count2026);
+
+      if (hasPercent) {
+        sheet.getRange(row, 3).setValue(
+          item.percent2026 !== null && item.percent2026 !== undefined ? item.percent2026 + "%" : "н/д"
+        );
+      }
+
+      if (hasComparison) {
+        sheet.getRange(row, 4).setValue(formatNullable(item.count2025));
+        if (hasPercent) {
+          sheet.getRange(row, 5).setValue(
+            item.percent2025 !== null && item.percent2025 !== undefined ? item.percent2025 + "%" : "н/д"
+          );
+        }
+        sheet.getRange(row, 6).setValue(formatNullable(item.delta));
+      }
+
+    });
+
+    if (items.length > 0) {
+
+      Formatter.addTableBorder(sheet.getRange(headerRow, 1, items.length + 1, width));
+
+      if (hasComparison) {
+        const deltaRange = sheet.getRange(firstDataRow, 6, items.length, 1);
+        Formatter.applyDeltaNumberFormat(deltaRange, " п.п.");
+        Formatter.applyDeltaHighlighting(sheet, deltaRange, this.DELTA_THRESHOLD_PERCENT);
+      }
+
+    }
+
+    ctx.row = firstDataRow + items.length;
+
+  },
+
+  /**
+   * Сырые данные — самый низкий приоритет чтения (тир 4), поэтому
+   * визуально отделены толстой границей сверху и свернуты по
+   * умолчанию. Содержимое (заголовки/строки) не меняется.
+   */
+  renderRawData_(ctx, reportData) {
+
+    const sheet = ctx.sheet;
+    const sectionStartRow = ctx.row;
+
+    const rawHeaders = reportData.headers;
+    const rawRows = reportData.filteredRows;
+
+    sheet.getRange(ctx.row, 1).setValue(
+      "Сырые данные (" + rawHeaders.length + " " +
+      this.pluralizeRu_(rawHeaders.length, ["столбец", "столбца", "столбцов"]) + ", " +
+      rawRows.length + " " +
+      this.pluralizeRu_(rawRows.length, ["строка", "строки", "строк"]) + ")"
+    );
+    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    Formatter.formatSectionDivider(sheet.getRange(ctx.row, 1, 1, Math.max(rawHeaders.length, 1)));
+    ctx.row += 1;
+
+    const rawHeaderRow = ctx.row;
+
+    sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length).setValues([rawHeaders]);
+    Formatter.formatTableHeader(
+      sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length)
+    );
+    ctx.row += 1;
+
+    if (rawRows.length > 0) {
+
+      sheet.getRange(rawHeaderRow + 1, 1, rawRows.length, rawHeaders.length).setValues(rawRows);
+
+      Formatter.addTableBorder(
+        sheet.getRange(rawHeaderRow, 1, rawRows.length + 1, rawHeaders.length)
+      );
+
+      ctx.row += rawRows.length;
+
+    }
+
+    const sectionContentRows = ctx.row - 1 - sectionStartRow;
+
+    if (sectionContentRows > 0) {
+      Formatter.groupRows(sheet, sectionStartRow + 1, sectionContentRows, true);
     }
 
   },
