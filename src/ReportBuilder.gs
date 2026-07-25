@@ -10,13 +10,10 @@ const ReportBuilder = {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
 
-    // Если лист уже существует — удаляем
-    const oldSheet = ss.getSheetByName(reportName);
-    if (oldSheet) {
-      ss.deleteSheet(oldSheet);
-    }
+    // Каждый запуск создает новый лист, не затрагивая ранее созданные отчеты
+    const uniqueName = this.getUniqueSheetName(ss, reportName);
 
-    const sheet = ss.insertSheet(reportName);
+    const sheet = ss.insertSheet(uniqueName);
 
     // ==========================================================
     // Оформление
@@ -253,6 +250,58 @@ const ReportBuilder = {
     }
 
     return sheet;
+
+  },
+
+  /**
+   * Сформировать название листа отчета на основе фактически выбранных фильтров.
+   * Если фильтры не выбраны — "Отчет_Все".
+   */
+  generateReportName(filters) {
+
+    const activeFilters = (filters || []).filter(filter => this.hasFilterValue(filter));
+
+    if (activeFilters.length === 0) {
+      return "Отчет_Все";
+    }
+
+    const parts = activeFilters.map(filter => this.formatFilterForPassport(filter));
+
+    return this.sanitizeSheetName("Отчет_" + parts.join("_"));
+
+  },
+
+  /**
+   * Убрать символы, запрещенные в названии листа Google Sheets ([ ] * ? : / \),
+   * и ограничить длину 100 символами.
+   */
+  sanitizeSheetName(name) {
+
+    const sanitized = name.replace(/[\[\]\*\?:\/\\]/g, "_");
+
+    return sanitized.length > 100 ? sanitized.substring(0, 100) : sanitized;
+
+  },
+
+  /**
+   * Подобрать уникальное имя листа, добавляя суффиксы _2, _3 и т.д.,
+   * если имя уже занято, с учетом ограничения в 100 символов.
+   */
+  getUniqueSheetName(ss, baseName) {
+
+    let name = baseName;
+    let counter = 2;
+
+    while (ss.getSheetByName(name)) {
+      const suffix = "_" + counter;
+      const trimmedBase = baseName.length + suffix.length > 100
+        ? baseName.substring(0, 100 - suffix.length)
+        : baseName;
+      name = trimmedBase + suffix;
+      counter++;
+    }
+
+    return name;
 
   },
 

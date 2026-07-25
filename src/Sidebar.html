@@ -85,8 +85,8 @@
 
     <label for="dataSource">Источник данных:</label>
     <select id="dataSource">
+      <option value="2026" selected>Ответы 2026</option>
       <option value="2025">Ответы 2025</option>
-      <option value="2026">Ответы 2026</option>
     </select>
 
     <div class="filters-block">
@@ -258,13 +258,30 @@
 
       function resetFilters() {
         activeFilters = [];
-        document.getElementById('dataSource').value = '2025';
+        document.getElementById('dataSource').value = '2026';
         document.getElementById('surveyInfo').innerHTML = '';
         document.getElementById('surveyInfo').className = '';
         document.getElementById('filtersError').textContent = '';
         document.getElementById('filtersError').className = '';
         renderActiveFilters();
-        renderFilterEditor();
+        loadFilterQuestions();
+      }
+
+      function loadFilterQuestions() {
+        var source = document.getElementById('dataSource').value;
+
+        google.script.run
+          .withSuccessHandler(function(questions) {
+            filterQuestions = questions;
+            renderQuestionSelect();
+            renderFilterEditor();
+          })
+          .withFailureHandler(function(error) {
+            var errorEl = document.getElementById('filtersError');
+            errorEl.className = 'error';
+            errorEl.textContent = error.message;
+          })
+          .getFilterableQuestions(source);
       }
 
       function formatFilterText(filter) {
@@ -276,6 +293,7 @@
       document.getElementById('questionSelect').addEventListener('change', renderFilterEditor);
       document.getElementById('addFilterBtn').addEventListener('click', addFilterFromEditor);
       document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
+      document.getElementById('dataSource').addEventListener('change', loadFilterQuestions);
 
       document.getElementById('buildReportBtn').addEventListener('click', function () {
 
@@ -328,18 +346,7 @@
           .getSurveyInfo(source);
       });
 
-      google.script.run
-        .withSuccessHandler(function(questions) {
-          filterQuestions = questions;
-          renderQuestionSelect();
-          renderFilterEditor();
-        })
-        .withFailureHandler(function(error) {
-          var errorEl = document.getElementById('filtersError');
-          errorEl.className = 'error';
-          errorEl.textContent = error.message;
-        })
-        .getFilterableQuestions();
+      loadFilterQuestions();
     </script>
   </body>
 </html>

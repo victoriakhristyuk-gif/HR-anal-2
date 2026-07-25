@@ -59,9 +59,9 @@ function buildReport(source, filters) {
   // Создаем отчет
   // ==========================================================
 
-  const reportName = "Отчет";
+  const reportName = ReportBuilder.generateReportName(filters);
 
-  ReportBuilder.createReport(
+  const sheet = ReportBuilder.createReport(
     {
       employees: filteredData.length,
       filters: filters,
@@ -80,7 +80,7 @@ function buildReport(source, filters) {
     source: source,
     employees: filteredData.length,
     filters: filters,
-    sheetName: reportName
+    sheetName: sheet.getName()
   };
 
 }
