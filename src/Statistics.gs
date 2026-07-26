@@ -11,7 +11,8 @@ const Statistics = {
    */
   calculateENPS(rows, headers) {
 
-    const enpsColumn = headers.indexOf("eNPS");
+    // Сравнение без учета регистра/пробелов — см. calculateDistribution.
+    const enpsColumn = headers.findIndex(header => this.normalize_(header) === "enps");
 
     if (enpsColumn === -1) {
       throw new Error("Не найден столбец eNPS");
@@ -69,7 +70,8 @@ const Statistics = {
 
     questions.forEach(question => {
 
-      const column = headers.indexOf(question);
+      // Сравнение без учета регистра/пробелов — см. calculateDistribution.
+      const column = headers.findIndex(header => this.normalize_(header) === this.normalize_(question));
 
       if (column === -1) return;
 
@@ -78,7 +80,17 @@ const Statistics = {
 
       rows.forEach(row => {
 
-        const value = Number(row[column]);
+        const raw = row[column];
+
+        // Пустой ответ нужно исключить ДО Number(): Number("") === 0,
+        // поэтому без этой проверки пропущенный вопрос молча считался
+        // бы оценкой "0" и занижал среднее (тот же случай пропусков,
+        // что уже обрабатывается в calculateDistribution).
+        if (raw === "" || raw === null || raw === undefined) {
+          return;
+        }
+
+        const value = Number(raw);
 
         if (isNaN(value)) return;
 
@@ -105,7 +117,13 @@ const Statistics = {
    */
   calculateDistribution(rows, headers, question) {
 
-    const columnIndex = headers.indexOf(question.title);
+    // Сравнение без учета регистра/пробелов — в заголовках реальной
+    // таблицы встречаются расхождения по регистру с названием в
+    // Questions.gs (например, "о жизни компании" вместо "О жизни
+    // компании"), из-за которых indexOf() не находил столбец.
+    const columnIndex = headers.findIndex(
+      header => this.normalize_(header) === this.normalize_(question.title)
+    );
 
     if (columnIndex === -1) {
       return [];
@@ -185,7 +203,10 @@ const Statistics = {
    */
   calculateAnswerFrequencies(rows, headers, question) {
 
-    const columnIndex = headers.indexOf(question.title);
+    // Сравнение без учета регистра/пробелов — см. calculateDistribution.
+    const columnIndex = headers.findIndex(
+      header => this.normalize_(header) === this.normalize_(question.title)
+    );
 
     if (columnIndex === -1) {
       return { items: [], validCount: 0 };

@@ -71,7 +71,11 @@ const FilterEngine = {
    */
   matchesFilter(row, headers, filter) {
 
-    const columnIndex = headers.indexOf(filter.question);
+    // Сравнение без учета регистра/пробелов — те же расхождения
+    // заголовков, что уже встречались в Statistics.calculateDistribution.
+    const columnIndex = headers.findIndex(
+      header => this.normalize(header) === this.normalize(filter.question)
+    );
 
     if (columnIndex === -1) {
       throw new Error("Не найден вопрос \"" + filter.question + "\" в данных");
