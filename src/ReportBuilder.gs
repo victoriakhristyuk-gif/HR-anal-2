@@ -19,14 +19,42 @@ const ReportBuilder = {
   DELTA_THRESHOLD_RATING: 0.3,   // средние оценки (шкала 1-5), баллы
   DELTA_THRESHOLD_PERCENT: 5,    // eNPS/распределения/Top-5, п.п.
 
-  createReport(reportData, reportName) {
+  // Ключ developer metadata, которым лист-отчет помечается сигнатурой
+  // своих параметров построения (источник + сравнение + фильтры).
+  // Позволяет находить "тот же" отчет независимо от его названия.
+  REPORT_KEY_METADATA_KEY: "hranalytics_report_key",
+
+  createReport(reportData, reportName, isCustomName) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const reportKey = this.getReportKey_(reportData);
+    const existingSheet = this.findReportSheetByKey_(ss, reportKey);
 
-    // Каждый запуск создает новый лист, не затрагивая ранее созданные отчеты
-    const uniqueName = this.getUniqueSheetName(ss, reportName);
+    // Если отчет с такими же параметрами уже существует — обновляем
+    // его на месте (без удаления/пересоздания листа). Иначе создаем
+    // новый лист с уникальным именем, не затрагивая прочие отчеты.
+    const sheet = existingSheet || ss.insertSheet(this.getUniqueSheetName(ss, reportName));
 
-    const sheet = ss.insertSheet(uniqueName);
+    if (existingSheet) {
+      // clear() не удаляет графики и не сбрасывает группировку строк —
+      // без этого при повторной сборке графики накапливались бы, а
+      // группировка либо превысила бы допустимую глубину, либо не
+      // совпадала с новым содержимым.
+      sheet.getCharts().forEach(chart => sheet.removeChart(chart));
+      // ВРЕМЕННО отключено для диагностики зависания — resetRowGroups_
+      // this.resetRowGroups_(sheet);
+      sheet.clear();
+      sheet.clearConditionalFormatRules();
+
+      // Пользовательское название не участвует в поиске отчета (сигнатура
+      // строится только по source/comparison/filters, см. getReportKey_),
+      // но если оно задано и отличается от текущего — переименовываем лист.
+      if (isCustomName && sheet.getName() !== reportName) {
+        sheet.setName(this.getUniqueSheetName(ss, reportName, sheet));
+      }
+    } else {
+      sheet.addDeveloperMetadata(this.REPORT_KEY_METADATA_KEY, reportKey);
+    }
 
     Formatter.applyBaseFont(sheet.getRange("A1:F50"));
     Formatter.setColumnWidths(sheet, [320, 110, 110, 110, 110, 110]);
@@ -800,20 +828,36 @@ const ReportBuilder = {
   },
 
   /**
-   * Сформировать название листа отчета на основе фактически выбранных фильтров.
-   * Если фильтры не выбраны — "Отчет_Все".
+   * Сформировать название листа отчета на основе значений выбранных
+   * фильтров, без названий вопросов. Если фильтры не выбраны —
+   * "Все сотрудники". Несколько фильтров соединяются через " • ".
    */
   generateReportName(filters) {
 
     const activeFilters = (filters || []).filter(filter => this.hasFilterValue(filter));
 
     if (activeFilters.length === 0) {
-      return "Отчет_Все";
+      return "Все сотрудники";
     }
 
-    const parts = activeFilters.map(filter => this.formatFilterForPassport(filter));
+    const parts = activeFilters.map(filter => this.formatFilterValueOnly_(filter));
 
-    return this.sanitizeSheetName("Отчет_" + parts.join("_"));
+    return this.sanitizeSheetName(parts.join(" • "));
+
+  },
+
+  /**
+   * Значение фильтра без названия вопроса (для автогенерируемого
+   * названия отчета). Для rating5/enps — оператор+число, для
+   * остальных — выбранные варианты через запятую.
+   */
+  formatFilterValueOnly_(filter) {
+
+    if (filter.type === "rating5" || filter.type === "enps") {
+      return filter.operator + filter.value;
+    }
+
+    return filter.values.join(", ");
 
   },
 
@@ -830,15 +874,92 @@ const ReportBuilder = {
   },
 
   /**
+   * Сигнатура параметров построения отчета: источник данных, включено
+   * ли сравнение, все выбранные фильтры и их значения. Не зависит от
+   * порядка выбора фильтров и от названия листа.
+   */
+  getReportKey_(reportData) {
+
+    const normalizedFilters = (reportData.filters || [])
+      .filter(filter => this.hasFilterValue(filter))
+      .map(filter => this.normalizeFilterForKey_(filter))
+      .sort((a, b) => a.question.localeCompare(b.question));
+
+    const payload = JSON.stringify({
+      source: reportData.source,
+      comparison: !!reportData.comparison,
+      filters: normalizedFilters
+    });
+
+    return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, payload, Utilities.Charset.UTF_8)
+      .map(byte => ((byte + 256) % 256).toString(16).padStart(2, "0"))
+      .join("");
+
+  },
+
+  /**
+   * Приводит один фильтр к стабильному для сигнатуры виду.
+   */
+  normalizeFilterForKey_(filter) {
+
+    if (filter.type === "rating5" || filter.type === "enps") {
+      return { question: filter.question, operator: filter.operator, value: filter.value };
+    }
+
+    return { question: filter.question, values: (filter.values || []).slice().sort() };
+
+  },
+
+  /**
+   * Найти лист ранее созданного отчета с той же сигнатурой параметров,
+   * если он есть. Поиск идет по developer metadata, а не по имени листа.
+   */
+  findReportSheetByKey_(ss, reportKey) {
+
+    const matches = ss.createDeveloperMetadataFinder()
+      .withKey(this.REPORT_KEY_METADATA_KEY)
+      .withValue(reportKey)
+      .find();
+
+    return matches.length > 0 ? matches[0].getLocation().getSheet() : null;
+
+  },
+
+  /**
+   * Полностью снять группировку строк листа (например, перед повторной
+   * сборкой уже существующего отчета), чтобы новая группировка
+   * создавалась с нуля и не накладывалась на старую.
+   */
+  resetRowGroups_(sheet) {
+
+    const maxRows = sheet.getMaxRows();
+
+    for (let row = 1; row <= maxRows; row++) {
+      const depth = sheet.getRowGroupDepth(row);
+      if (depth > 0) {
+        sheet.getRange(row, 1).shiftRowGroupDepth(-depth);
+      }
+    }
+
+  },
+
+  /**
    * Подобрать уникальное имя листа, добавляя суффиксы _2, _3 и т.д.,
    * если имя уже занято, с учетом ограничения в 100 символов.
+   * excludeSheet (опционально) — лист, который не считается коллизией
+   * (например, сам переименовываемый лист уже мог носить это имя).
    */
-  getUniqueSheetName(ss, baseName) {
+  getUniqueSheetName(ss, baseName, excludeSheet) {
 
     let name = baseName;
     let counter = 2;
 
-    while (ss.getSheetByName(name)) {
+    const isTaken = candidate => {
+      const found = ss.getSheetByName(candidate);
+      return found !== null && found !== excludeSheet;
+    };
+
+    while (isTaken(name)) {
       const suffix = "_" + counter;
       const trimmedBase = baseName.length + suffix.length > 100
         ? baseName.substring(0, 100 - suffix.length)

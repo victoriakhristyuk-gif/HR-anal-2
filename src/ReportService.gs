@@ -4,7 +4,7 @@
  * ==========================================================
  */
 
-function buildReport(source, filters, compareWith2025) {
+function buildReport(source, filters, compareWith2025, customReportName) {
 
   // ==========================================================
   // Загружаем данные
@@ -121,7 +121,11 @@ function buildReport(source, filters, compareWith2025) {
   // Создаем отчет
   // ==========================================================
 
-  const reportName = ReportBuilder.generateReportName(filters);
+  const trimmedCustomName = (customReportName || "").trim();
+  const isCustomName = trimmedCustomName.length > 0;
+  const reportName = isCustomName
+    ? ReportBuilder.sanitizeSheetName(trimmedCustomName)
+    : ReportBuilder.generateReportName(filters);
 
   const sheet = ReportBuilder.createReport(
     {
@@ -136,7 +140,8 @@ function buildReport(source, filters, compareWith2025) {
       filteredRows: filteredData,
       comparison: comparison
     },
-    reportName
+    reportName,
+    isCustomName
   );
 
   return {

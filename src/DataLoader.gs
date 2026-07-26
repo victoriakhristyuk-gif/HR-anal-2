@@ -79,7 +79,7 @@ function headersEqual_(headersA, headersB) {
   }
 
   for (var i = 0; i < headersA.length; i++) {
-    if (headersA[i] !== headersB[i]) {
+    if (String(headersA[i]).trim().toLowerCase() !== String(headersB[i]).trim().toLowerCase()) {
       return false;
     }
   }

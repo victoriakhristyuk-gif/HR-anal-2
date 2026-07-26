@@ -112,6 +112,9 @@
       <div id="filtersError"></div>
     </div>
 
+    <label for="reportName">Название отчета (необязательно)</label>
+    <input type="text" id="reportName" placeholder="Например: Отдел продаж">
+
     <p>Проект успешно запущен.</p>
     <button type="button" id="buildReportBtn">Создать отчет</button>
     <br>
@@ -327,6 +330,7 @@
 
         var source = document.getElementById('dataSource').value;
         var compareWith2025 = document.getElementById('compareWith2025').checked;
+        var customReportName = document.getElementById('reportName').value;
         var infoEl = document.getElementById('surveyInfo');
         infoEl.className = '';
         infoEl.textContent = 'Построение отчета...';
@@ -349,7 +353,7 @@
             infoEl.className = 'error';
             infoEl.textContent = error.message;
           })
-          .buildReportFromSidebar(source, activeFilters, compareWith2025);
+          .buildReportFromSidebar(source, activeFilters, compareWith2025, customReportName);
 
       });
 
