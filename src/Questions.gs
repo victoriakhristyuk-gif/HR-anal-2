@@ -142,8 +142,47 @@ const Questions = {
 
   },
 
+  // Фиксированный порядок вариантов для вопросов с шкалой
+  // "Да / Скорее да / Скорее нет / Нет" (см. isYesNoScale) —
+  // используется только для распознавания, не для расчетов.
+  YES_NO_SCALE_ANSWERS: ["да", "скорее да", "скорее нет", "нет"],
+
+  /**
+   * Вопрос со шкалой "Да / Скорее да / Скорее нет / Нет" (в отличие
+   * от других scale4-вопросов анкеты, например "Смена работы", у
+   * которых те же 4 варианта, но другой текст). Используется отчетом
+   * для компактного визуального представления таких вопросов вместо
+   * обычной таблицы распределения.
+   */
+  isYesNoScale(question) {
+
+    if (question.type !== "scale4") {
+      return false;
+    }
+
+    const normalized = question.answers.map(answer => this.normalizeForComparison_(answer));
+
+    return normalized.length === this.YES_NO_SCALE_ANSWERS.length &&
+      normalized.every((answer, index) => answer === this.YES_NO_SCALE_ANSWERS[index]);
+
+  },
+
+  normalizeForComparison_(value) {
+    return String(value).trim().toLowerCase();
+  },
+
   /**
    * Разбор строки "answers" в массив.
+   *
+   * В карте встречаются вопросы с разными разделителями вариантов
+   * ответа: запятая (шкалы rating5/eNPS — "1, 2, 3, 4, 5"), перенос
+   * строки (Город/Отдел) и точка с запятой (остальные, включая scale4/
+   * scale5). Если в строке есть хотя бы одна точка с запятой — это и
+   * есть выбранный для вопроса разделитель, и запятая внутри текста
+   * варианта ответа не разбивает его на части (иначе, например, вариант
+   * "очень редко, но такие мысли были" вопроса "Смена работы" ошибочно
+   * распадался бы на "очень редко" и "но такие мысли были" — 5 вариантов
+   * вместо правильных 4).
    */
   parseAnswers_(rawAnswers) {
 
@@ -151,8 +190,10 @@ const Questions = {
       return [];
     }
 
+    const separator = rawAnswers.indexOf(";") !== -1 ? /[;\n]+/ : /[,;\n]+/;
+
     return rawAnswers
-      .split(/[,;\n]+/)
+      .split(separator)
       .map(value => value.trim())
       .filter(value => value.length > 0);
 

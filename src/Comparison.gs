@@ -62,8 +62,40 @@ const Comparison = {
       value2025: value2025,
       delta: (value2026 !== null && value2025 !== null)
         ? value2026 - value2025
-        : null
+        : null,
+      categories: this.compareEnpsCategories_(enps2026, enps2025)
     };
+
+  },
+
+  /**
+   * Разбивка eNPS (промоутеры/нейтралы/критики) по годам — количество,
+   * % (null, если в этом году нет ни одного валидного ответа, по той
+   * же схеме, что и compareDistributionItems) и дельта в процентных
+   * пунктах. Не пересчитывает eNPS — только сопоставляет уже готовые
+   * enps2026/enps2025 от Statistics.calculateENPS.
+   */
+  compareEnpsCategories_(enps2026, enps2025) {
+
+    return ["promoters", "neutrals", "detractors"].map(category => {
+
+      const percentKey = category + "Percent";
+
+      const percent2026 = enps2026.total > 0 ? enps2026[percentKey] : null;
+      const percent2025 = enps2025.total > 0 ? enps2025[percentKey] : null;
+
+      return {
+        category: category,
+        count2026: enps2026[category],
+        percent2026: percent2026,
+        count2025: enps2025[category],
+        percent2025: percent2025,
+        delta: (percent2026 !== null && percent2025 !== null)
+          ? percent2026 - percent2025
+          : null
+      };
+
+    });
 
   },
 
