@@ -348,13 +348,39 @@
       .chip-box {
         display: flex;
         flex-wrap: wrap;
+        align-content: flex-start;
         gap: 6px;
         padding: 8px;
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         background: var(--surface);
         min-height: 40px;
-        margin-bottom: 8px;
+        max-height: 84px;
+        overflow: hidden;
+        transition: max-height .18s;
+      }
+
+      .chip-box.expanded {
+        max-height: 220px;
+        overflow-y: auto;
+      }
+
+      .show-more-pill {
+        display: none;
+        margin: 6px 0 8px;
+        padding: 4px 10px;
+        border-radius: 20px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        font-size: 11.5px;
+        font-weight: 600;
+        color: var(--primary);
+        transition: border-color .15s, background .15s;
+      }
+
+      .show-more-pill:hover {
+        border-color: var(--primary);
+        background: var(--primary-soft);
       }
 
       .chip {
@@ -367,6 +393,14 @@
         font-weight: 600;
         padding: 5px 6px 5px 10px;
         border-radius: 20px;
+        max-width: 100%;
+      }
+
+      .chip-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 210px;
       }
 
       .chip button {
@@ -383,6 +417,7 @@
         align-items: center;
         justify-content: center;
         padding: 0;
+        flex-shrink: 0;
       }
 
       .search-input {
@@ -400,7 +435,7 @@
         display: flex;
         align-items: center;
         gap: 9px;
-        padding: 9px 12px;
+        padding: 8px 12px;
         font-size: 13.5px;
         cursor: pointer;
         border-bottom: 1px solid var(--border);
@@ -420,12 +455,73 @@
         accent-color: var(--primary);
         width: 15px;
         height: 15px;
+        flex-shrink: 0;
+      }
+
+      .option-text {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        min-width: 0;
       }
 
       .count-badge {
         font-size: 11px;
         color: var(--text-muted);
         margin-top: 7px;
+      }
+
+      /* active filters accordion */
+      .accordion {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+      }
+
+      .accordion-header {
+        width: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--primary-soft);
+        border: none;
+        font-family: 'Inter', sans-serif;
+        font-size: 12.5px;
+        font-weight: 700;
+        color: var(--text);
+      }
+
+      .accordion-chevron {
+        color: var(--text-muted);
+        font-size: 10px;
+        transition: transform .18s;
+        flex-shrink: 0;
+      }
+
+      .accordion.expanded .accordion-chevron {
+        transform: rotate(180deg);
+      }
+
+      .accordion-body {
+        max-height: 0;
+        overflow: hidden;
+        transition: max-height .18s;
+      }
+
+      .accordion.expanded .accordion-body {
+        max-height: 200px;
+        overflow-y: auto;
+        padding: 10px;
+      }
+
+      .accordion-body .filter-item {
+        margin-bottom: 8px;
+      }
+
+      .accordion-body .filter-item:last-child {
+        margin-bottom: 0;
       }
 
       /* ghost / secondary buttons */
@@ -450,33 +546,6 @@
       .btn-ghost:hover {
         border-color: var(--primary);
         color: var(--primary);
-      }
-
-      .banner {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        background: var(--success-soft);
-        border: 1px solid #C9EFD8;
-        color: #0B7A44;
-        padding: 11px 13px;
-        border-radius: var(--radius-sm);
-        font-size: 12.5px;
-        font-weight: 600;
-        margin-bottom: 14px;
-      }
-
-      .banner .ic {
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: var(--success);
-        color: #fff;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 11px;
       }
 
       .cta {
@@ -571,11 +640,6 @@
       <div id="reportNameHint" class="hint" style="display:none;">
         Отчетов будет несколько — каждый называется своим значением фильтра.
       </div>
-    </div>
-
-    <div class="banner">
-      <div class="ic">✓</div>
-      Проект успешно запущен.
     </div>
 
     <button type="button" class="cta" id="buildReportBtn">Создать отчет</button>
@@ -742,6 +806,17 @@
         var chipBox = document.createElement('div');
         chipBox.className = 'chip-box';
 
+        var chipsExpanded = false;
+
+        var showMoreBtn = document.createElement('button');
+        showMoreBtn.type = 'button';
+        showMoreBtn.className = 'show-more-pill';
+
+        showMoreBtn.addEventListener('click', function() {
+          chipsExpanded = !chipsExpanded;
+          updateChipOverflow();
+        });
+
         var search = document.createElement('input');
         search.type = 'text';
         search.className = 'search-input';
@@ -772,8 +847,13 @@
             toggleOption(option, checkbox.checked);
           });
 
+          var text = document.createElement('span');
+          text.className = 'option-text';
+          text.textContent = option.value;
+          text.title = option.value;
+
           row.appendChild(checkbox);
-          row.appendChild(document.createTextNode(option.value));
+          row.appendChild(text);
           list.appendChild(row);
 
           rows.push({ option: option, checkbox: checkbox, row: row });
@@ -786,6 +866,32 @@
           });
         });
 
+        /**
+         * Сколько чипов не влезает в свёрнутый chip-box (84px), считаем
+         * по фактической раскладке flex-wrap — она не меняется от
+         * max-height/overflow, так что offsetTop корректен и в
+         * свёрнутом, и в развёрнутом состоянии.
+         */
+        function updateChipOverflow() {
+          var collapsedLimit = 84;
+          var chips = Array.from(chipBox.children);
+
+          var hiddenCount = chips.filter(function(chip) {
+            return chip.offsetTop + chip.offsetHeight > collapsedLimit;
+          }).length;
+
+          if (hiddenCount === 0) {
+            chipsExpanded = false;
+            chipBox.classList.remove('expanded');
+            showMoreBtn.style.display = 'none';
+            return;
+          }
+
+          chipBox.classList.toggle('expanded', chipsExpanded);
+          showMoreBtn.style.display = '';
+          showMoreBtn.textContent = chipsExpanded ? 'Свернуть' : 'Показать ещё ' + hiddenCount;
+        }
+
         function refresh() {
           chipBox.innerHTML = '';
 
@@ -794,7 +900,12 @@
           selected.forEach(function(option) {
             var chip = document.createElement('div');
             chip.className = 'chip';
-            chip.appendChild(document.createTextNode(option.value));
+
+            var text = document.createElement('span');
+            text.className = 'chip-text';
+            text.textContent = option.value;
+            text.title = option.value;
+            chip.appendChild(text);
 
             var removeBtn = document.createElement('button');
             removeBtn.type = 'button';
@@ -812,11 +923,13 @@
           });
 
           count.textContent = 'Выбрано: ' + selected.length;
+          updateChipOverflow();
         }
 
         refresh();
 
         wrap.appendChild(chipBox);
+        wrap.appendChild(showMoreBtn);
         wrap.appendChild(search);
         wrap.appendChild(list);
         wrap.appendChild(count);
@@ -921,9 +1034,41 @@
         return row;
       }
 
+      var activeFiltersExpanded = false;
+
       function renderActiveFilters() {
         var container = document.getElementById('activeFilters');
         container.innerHTML = '';
+
+        if (activeFilters.length === 0) {
+          updateReportNameState();
+          return;
+        }
+
+        var accordion = document.createElement('div');
+        accordion.className = 'accordion';
+
+        var header = document.createElement('button');
+        header.type = 'button';
+        header.className = 'accordion-header';
+
+        var headerText = document.createElement('span');
+        headerText.textContent = 'Активные фильтры (' + activeFilters.length + ')';
+
+        var chevron = document.createElement('span');
+        chevron.className = 'accordion-chevron';
+        chevron.textContent = '▾';
+
+        header.appendChild(headerText);
+        header.appendChild(chevron);
+
+        header.addEventListener('click', function() {
+          activeFiltersExpanded = !activeFiltersExpanded;
+          accordion.classList.toggle('expanded', activeFiltersExpanded);
+        });
+
+        var body = document.createElement('div');
+        body.className = 'accordion-body';
 
         activeFilters.forEach(function(filter) {
           var block = document.createElement('div');
@@ -948,8 +1093,13 @@
             block.appendChild(mode);
           }
 
-          container.appendChild(block);
+          body.appendChild(block);
         });
+
+        accordion.classList.toggle('expanded', activeFiltersExpanded);
+        accordion.appendChild(header);
+        accordion.appendChild(body);
+        container.appendChild(accordion);
 
         updateReportNameState();
       }
