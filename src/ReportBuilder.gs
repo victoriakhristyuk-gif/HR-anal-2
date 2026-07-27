@@ -976,9 +976,12 @@ const ReportBuilder = {
    *    группы. Положительная и отрицательная группы зеркальны (delta
    *    одной равна -delta другой) — это один и тот же факт с двух
    *    сторон, поэтому в список идет только отрицательная/нежелательная
-   *    группа (bucket.direction === "down", 🔴 в getYesNoBlockConfig_),
-   *    а не та из двух, что случайно больше по модулю. Так соседние
-   *    градации одного знака (например, "да" ▼ и "скорее да" ▲) не
+   *    сторона — только та группа, что РАСТЕТ (delta > 0), независимо от
+   *    того, положительная она (🟢) или отрицательная (🔴); падающая
+   *    (зеркальная) сторона не показывается вовсе — стрелка вниз рядом с
+   *    ней ничего не добавляет к уже показанному факту, а у 🔴-группы еще
+   *    и требует двойного отрицания, чтобы понять знак новости. Так
+   *    соседние градации одного знака (например, "да" ▼ и "скорее да" ▲) не
    *    попадают в блок как две противоречащие друг другу строки, и один
    *    и тот же сдвиг не занимает в топе два слота вместо одного —
    *    берется уже готовая, посчитанная для этого же блока в отчете
@@ -1057,23 +1060,30 @@ const ReportBuilder = {
         }
 
         // Бакеты "положительная/отрицательная группа" зеркальны (delta
-        // одной равна -delta другой) — это один и тот же факт, поэтому в
-        // "Заметные изменения" попадает только отрицательная сторона
-        // (bucket.direction === "down", т.е. 🔴-группа из
-        // getYesNoBlockConfig_), а не та, что случайно больше по модулю.
-        const negativeBucket = this.aggregateAnswerBuckets_(entry.items, blockConfig.buckets)
-          .find(bucket => bucket.direction === "down");
+        // одной равна -delta другой) — это один и тот же факт с двух
+        // сторон, поэтому в "Заметные изменения" попадает только РАСТУЩАЯ
+        // сторона (delta > 0), а падающая (та же самая дельта с обратным
+        // знаком) не показывается вовсе — стрелка вниз рядом с падающим
+        // зеркальным бакетом ничего не добавляет к уже показанному факту,
+        // а для отрицательного бакета (🔴) еще и путает: "Нет общения ▼"
+        // требует двойного отрицания, чтобы понять, что это улучшение.
+        // bucket.direction ("up"/"down" — 🟢/🔴 из getYesNoBlockConfig_)
+        // здесь не критерий выбора, а лишь классификация хорошо/плохо —
+        // ее используют другие места (например, KPI-карточка вопроса),
+        // не этот блок.
+        const growingBucket = this.aggregateAnswerBuckets_(entry.items, blockConfig.buckets)
+          .find(bucket => typeof bucket.delta === "number" && bucket.delta > 0);
 
-        if (!negativeBucket || negativeBucket.delta === null || negativeBucket.delta === undefined) {
+        if (!growingBucket) {
           return;
         }
 
         changes.push({
           questionTitle: entry.question.title,
-          answerLabel: this.stripBucketLabelEmoji_(negativeBucket.label),
-          delta: negativeBucket.delta,
+          answerLabel: this.stripBucketLabelEmoji_(growingBucket.label),
+          delta: growingBucket.delta,
           kind: "percent",
-          direction: negativeBucket.delta > 0 ? "up" : "down"
+          direction: "up"
         });
 
         return;
