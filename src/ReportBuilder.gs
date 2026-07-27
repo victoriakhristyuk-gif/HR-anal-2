@@ -2874,24 +2874,6 @@ const ReportBuilder = {
   },
 
   /**
-   * Полностью снять группировку строк листа (например, перед повторной
-   * сборкой уже существующего отчета), чтобы новая группировка
-   * создавалась с нуля и не накладывалась на старую.
-   */
-  resetRowGroups_(sheet) {
-
-    const maxRows = sheet.getMaxRows();
-
-    for (let row = 1; row <= maxRows; row++) {
-      const depth = sheet.getRowGroupDepth(row);
-      if (depth > 0) {
-        sheet.getRange(row, 1).shiftRowGroupDepth(-depth);
-      }
-    }
-
-  },
-
-  /**
    * Подобрать уникальное имя листа, добавляя суффиксы _2, _3 и т.д.,
    * если имя уже занято, с учетом ограничения в 100 символов.
    * excludeSheet (опционально) — лист, который не считается коллизией
