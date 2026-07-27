@@ -2,20 +2,44 @@
 <html>
   <head>
     <base target="_top">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     <style>
+      :root {
+        --bg: #F6F6FB;
+        --page: #EFEFF6;
+        --surface: #FFFFFF;
+        --border: #E7E7F1;
+        --text: #1E2130;
+        --text-muted: #71748A;
+        --primary: #46BDC6;
+        --primary-hover: #379BA3;
+        --primary-soft: #E3F5F6;
+        --success: #0F9D58;
+        --success-soft: #E9F9EF;
+        --radius-lg: 16px;
+        --radius-md: 12px;
+        --radius-sm: 8px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
       body {
-        font-family: Arial, sans-serif;
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+        background: var(--bg);
+        color: var(--text);
         padding: 16px;
+        margin: 0;
       }
 
       h1 {
+        font-family: 'Manrope', -apple-system, sans-serif;
+        font-weight: 800;
         font-size: 18px;
         margin: 0 0 16px;
-      }
-
-      h2 {
-        font-size: 16px;
-        margin: 0 0 12px;
+        letter-spacing: -0.01em;
       }
 
       p {
@@ -24,16 +48,100 @@
 
       label {
         display: block;
-        margin-bottom: 4px;
-        font-weight: bold;
+        margin-bottom: 7px;
+        font-weight: 600;
+        font-size: 13px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+
+      .eyebrow {
+        font-family: 'Manrope', sans-serif;
+        font-weight: 700;
+        font-size: 11px;
+        letter-spacing: .06em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+        margin: 0 0 12px;
+      }
+
+      .card-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 12px;
+      }
+
+      .card-head .eyebrow {
+        margin: 0;
+      }
+
+      .reset-link {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--primary);
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 0;
+        margin: 0;
+      }
+
+      .select-wrap {
+        position: relative;
       }
 
       select,
-      input[type="number"] {
+      input[type="number"],
+      input[type="text"] {
         width: 100%;
-        padding: 6px;
+        padding: 11px 13px;
         margin-bottom: 12px;
         box-sizing: border-box;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        font-family: 'Inter', sans-serif;
+        font-size: 13.5px;
+        color: var(--text);
+      }
+
+      select {
+        appearance: none;
+        -webkit-appearance: none;
+        padding-right: 36px;
+        cursor: pointer;
+      }
+
+      select:focus,
+      input[type="number"]:focus,
+      input[type="text"]:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px var(--primary-soft);
+      }
+
+      input::placeholder {
+        color: #B0B2C2;
+      }
+
+      .select-wrap::after {
+        content: "";
+        position: absolute;
+        right: 13px;
+        top: 50%;
+        width: 8px;
+        height: 8px;
+        border-right: 2px solid var(--text-muted);
+        border-bottom: 2px solid var(--text-muted);
+        transform: translateY(-70%) rotate(45deg);
+        pointer-events: none;
       }
 
       select[multiple] {
@@ -41,32 +149,34 @@
       }
 
       button {
-        padding: 8px 16px;
         cursor: pointer;
-        margin-bottom: 8px;
+        font-family: 'Inter', sans-serif;
       }
 
       #surveyInfo,
       #filtersError {
         margin-top: 8px;
+        font-size: 12.5px;
       }
 
       .error {
-        color: red;
+        color: #C0392B;
       }
 
       .filters-block {
-        margin-bottom: 16px;
+        margin-bottom: 0;
       }
 
       .filter-item {
-        border: 1px solid #ccc;
-        padding: 8px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
         margin-bottom: 8px;
       }
 
       .filter-item .filter-title {
-        font-weight: bold;
+        font-weight: 700;
       }
 
       .operator-row {
@@ -79,79 +189,397 @@
         margin-bottom: 0;
       }
 
+      /* segmented mode control */
       .mode-row {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
         margin-bottom: 12px;
       }
 
       .mode-row label {
         display: flex;
         align-items: flex-start;
+        gap: 10px;
         font-weight: normal;
-        margin-bottom: 4px;
+        font-size: 13px;
+        line-height: 1.35;
+        margin-bottom: 0;
+        border: 1.5px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 10px 12px;
+        cursor: pointer;
+        transition: border-color .15s, background .15s;
+      }
+
+      .mode-row label:has(input:checked) {
+        border-color: var(--primary);
+        background: var(--primary-soft);
       }
 
       .mode-row input[type="radio"] {
-        width: auto;
-        margin: 2px 6px 0 0;
+        appearance: none;
+        -webkit-appearance: none;
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        border: 2px solid var(--border);
+        margin: 1px 0 0;
+        flex-shrink: 0;
+        position: relative;
+      }
+
+      .mode-row label:has(input:checked) input[type="radio"] {
+        border-color: var(--primary);
+      }
+
+      .mode-row input[type="radio"]:checked::after {
+        content: "";
+        position: absolute;
+        inset: 3px;
+        border-radius: 50%;
+        background: var(--primary);
       }
 
       .filter-item .filter-mode {
         display: block;
-        color: #666;
+        color: var(--text-muted);
+        font-size: 12px;
+        margin-top: 4px;
       }
 
       .hint {
-        color: #666;
-        margin: -8px 0 12px;
+        color: var(--text-muted);
+        margin: -6px 0 12px;
+        font-size: 12px;
+      }
+
+      .dept-groups {
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 8px 10px;
+        margin-bottom: 8px;
+      }
+
+      .dept-group-row {
+        display: flex;
+        align-items: center;
+        font-weight: 600;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+
+      .dept-group-row:last-child {
+        margin-bottom: 0;
+      }
+
+      .dept-group-row input[type="checkbox"] {
+        width: auto;
+        accent-color: var(--primary);
+        margin: 0 8px 0 0;
       }
 
       .report-line {
         margin-top: 2px;
+      }
+
+      /* toggle switch */
+      .row-between {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 14px;
+      }
+
+      .row-between span {
+        font-size: 13px;
+        font-weight: 500;
+      }
+
+      .switch {
+        position: relative;
+        display: inline-block;
+        width: 38px;
+        height: 22px;
+        flex-shrink: 0;
+      }
+
+      .switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+      }
+
+      .switch .slider {
+        position: absolute;
+        inset: 0;
+        background: #D9DAE6;
+        border-radius: 20px;
+        cursor: pointer;
+        transition: background .18s;
+      }
+
+      .switch .slider::after {
+        content: "";
+        position: absolute;
+        top: 2px;
+        left: 2px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: #fff;
+        transition: transform .18s;
+        box-shadow: 0 1px 3px rgba(0,0,0,.25);
+      }
+
+      .switch input:checked + .slider {
+        background: var(--primary);
+      }
+
+      .switch input:checked + .slider::after {
+        transform: translateX(16px);
+      }
+
+      /* chip multiselect */
+      .multiselect-ui {
+        margin-bottom: 8px;
+      }
+
+      .chip-box {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        padding: 8px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+        min-height: 40px;
+        margin-bottom: 8px;
+      }
+
+      .chip {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        background: var(--primary-soft);
+        color: var(--primary-hover);
+        font-size: 12.5px;
+        font-weight: 600;
+        padding: 5px 6px 5px 10px;
+        border-radius: 20px;
+      }
+
+      .chip button {
+        border: none;
+        background: rgba(70,189,198,.18);
+        color: var(--primary-hover);
+        width: 16px;
+        height: 16px;
+        border-radius: 50%;
+        font-size: 11px;
+        line-height: 1;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+      }
+
+      .search-input {
+        margin-bottom: 8px !important;
+      }
+
+      .option-list {
+        max-height: 150px;
+        overflow-y: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+      }
+
+      .option-row {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 9px 12px;
+        font-size: 13.5px;
+        cursor: pointer;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 0;
+        font-weight: normal;
+      }
+
+      .option-row:last-child {
+        border-bottom: none;
+      }
+
+      .option-row:hover {
+        background: var(--primary-soft);
+      }
+
+      .option-row input {
+        accent-color: var(--primary);
+        width: 15px;
+        height: 15px;
+      }
+
+      .count-badge {
+        font-size: 11px;
+        color: var(--text-muted);
+        margin-top: 7px;
+      }
+
+      /* ghost / secondary buttons */
+      .ghost-row {
+        display: flex;
+        gap: 8px;
+        margin-top: 2px;
+      }
+
+      .btn-ghost {
+        flex: 1;
+        padding: 10px;
+        border-radius: var(--radius-sm);
+        border: 1.5px dashed var(--border);
+        background: transparent;
+        font-size: 12.5px;
+        font-weight: 600;
+        color: var(--text-muted);
+        transition: border-color .15s, color .15s;
+      }
+
+      .btn-ghost:hover {
+        border-color: var(--primary);
+        color: var(--primary);
+      }
+
+      .banner {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--success-soft);
+        border: 1px solid #C9EFD8;
+        color: #0B7A44;
+        padding: 11px 13px;
+        border-radius: var(--radius-sm);
+        font-size: 12.5px;
+        font-weight: 600;
+        margin-bottom: 14px;
+      }
+
+      .banner .ic {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--success);
+        color: #fff;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+      }
+
+      .cta {
+        width: 100%;
+        padding: 13px;
+        border: none;
+        border-radius: var(--radius-md);
+        background: var(--primary);
+        color: #fff;
+        font-family: 'Manrope', sans-serif;
+        font-weight: 700;
+        font-size: 14px;
+        transition: background .15s, transform .1s;
+        box-shadow: 0 10px 20px -8px rgba(70,189,198,.55);
+      }
+
+      .cta:hover {
+        background: var(--primary-hover);
+      }
+
+      .cta:active {
+        transform: scale(.98);
+      }
+
+      .btn-secondary {
+        width: 100%;
+        padding: 11px;
+        margin-top: 8px;
+        border-radius: var(--radius-md);
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
+        font-weight: 600;
+        font-size: 13px;
+        transition: border-color .15s, color .15s;
+      }
+
+      .btn-secondary:hover {
+        border-color: var(--primary);
+        color: var(--primary);
       }
     </style>
   </head>
   <body>
     <h1>HR Analytics</h1>
 
-    <label for="dataSource">Источник данных:</label>
-    <select id="dataSource">
-      <option value="2026" selected>Ответы 2026</option>
-      <option value="2025">Ответы 2025</option>
-    </select>
+    <div class="card">
+      <p class="eyebrow">Источник данных</p>
+      <label for="dataSource">Источник данных:</label>
+      <div class="select-wrap">
+        <select id="dataSource">
+          <option value="2026" selected>Ответы 2026</option>
+          <option value="2025">Ответы 2025</option>
+        </select>
+      </div>
 
-    <div id="compareBlock" style="display:none; margin-bottom:12px;">
-      <label style="display:flex; align-items:center; font-weight:normal; margin-bottom:0;">
-        <input type="checkbox" id="compareWith2025" style="width:auto; margin:0 6px 0 0;">
-        Сравнить с 2025
-      </label>
+      <div id="compareBlock" class="row-between" style="display:none;">
+        <span>Сравнить с 2025</span>
+        <label class="switch">
+          <input type="checkbox" id="compareWith2025">
+          <span class="slider"></span>
+        </label>
+      </div>
     </div>
 
-    <div class="filters-block">
-      <h2>Фильтры</h2>
+    <div class="card filters-block">
+      <div class="card-head">
+        <p class="eyebrow">Фильтры</p>
+        <button type="button" class="reset-link" id="resetFiltersBtn">Сбросить фильтры</button>
+      </div>
 
       <label for="questionSelect">Вопрос</label>
-      <select id="questionSelect"></select>
+      <div class="select-wrap">
+        <select id="questionSelect"></select>
+      </div>
 
       <div id="filterEditor"></div>
 
-      <button type="button" id="addFilterBtn">+ Добавить фильтр</button>
-      <button type="button" id="resetFiltersBtn">Сбросить фильтры</button>
+      <div class="ghost-row">
+        <button type="button" class="btn-ghost" id="addFilterBtn">+ Добавить фильтр</button>
+      </div>
 
       <div id="activeFilters"></div>
 
       <div id="filtersError"></div>
     </div>
 
-    <label for="reportName">Название отчета (необязательно)</label>
-    <input type="text" id="reportName" placeholder="Например: Отдел продаж">
-    <div id="reportNameHint" class="hint" style="display:none;">
-      Отчетов будет несколько — каждый называется своим значением фильтра.
+    <div class="card">
+      <p class="eyebrow">Отчёт</p>
+      <label for="reportName">Название отчета (необязательно)</label>
+      <input type="text" id="reportName" placeholder="Например: Отдел продаж">
+      <div id="reportNameHint" class="hint" style="display:none;">
+        Отчетов будет несколько — каждый называется своим значением фильтра.
+      </div>
     </div>
 
-    <p>Проект успешно запущен.</p>
-    <button type="button" id="buildReportBtn">Создать отчет</button>
-    <br>
-    <button type="button" id="checkDataBtn">Проверить данные</button>
+    <div class="banner">
+      <div class="ic">✓</div>
+      Проект успешно запущен.
+    </div>
+
+    <button type="button" class="cta" id="buildReportBtn">Создать отчет</button>
+    <button type="button" class="btn-secondary" id="checkDataBtn">Проверить данные</button>
     <div id="surveyInfo"></div>
 
     <script>
@@ -160,6 +588,67 @@
 
       var filterQuestions = [];
       var activeFilters = [];
+
+      var DEPARTMENT_QUESTION_TITLE = 'Отдел';
+
+      /**
+       * Группы отделов ("управления") для быстрого выбора в фильтре
+       * "Отдел". Выбор группы заменяет текущую выборку отделов и
+       * взаимоисключает выбор другой группы. Названия отделов должны
+       * дословно совпадать со значениями в Questions.gs — часть отделов
+       * из исходных списков управлений не входит в опросник и здесь не
+       * учтена (сверено и подтверждено отдельно).
+       */
+      var DEPARTMENT_GROUPS = [
+        {
+          id: 'itUpravlenie',
+          title: 'IT-управление',
+          departments: [
+            'HR-отдел',
+            'Администрация IT',
+            'PR-отдел',
+            'Отдел внедрения и обслуживания учетных систем',
+            'Отдел информационной безопасности инфраструктуры',
+            'Отдел обслуживания платежных систем',
+            'Отдел обучения',
+            'Отдел поддержки и управления сервисами IP-телефонии',
+            'Отдел программируемых микроконтроллеров',
+            'Отдел промышленной автоматизации',
+            'Отдел связи',
+            'Отдел серверных решений и СХД',
+            'Отдел сетевых технологий',
+            'Отдел системного администрирования',
+            'Отдел технической поддержки',
+            'Отдел эксплуатации сети'
+          ]
+        },
+        {
+          id: 'razrabotkaPo',
+          title: 'Управление разработки ПО',
+          departments: [
+            'Отдел автоматизации операционной деятельности',
+            'Отдел аналитики и управления данными',
+            'Отдел бизнес-анализа',
+            'Отдел локализации и перевода',
+            'Отдел поддержки прикладного программного обеспечения',
+            'Отдел проектирования и дизайна интерфейсов',
+            'Отдел развития продуктов',
+            'Отдел разработки биллинг сервисов',
+            'Отдел разработки водительских сервисов',
+            'Отдел разработки гео сервисов',
+            'Отдел разработки интегрированных систем',
+            'Отдел разработки инфраструктурных сервисов',
+            'Отдел разработки клиентских сервисов',
+            'Отдел разработки мобильного ПО',
+            'Отдел разработки сайтов',
+            'Отдел разработки сервисов заказа',
+            'Отдел разработки технической документации',
+            'Отдел системного анализа',
+            'Отдел тестирования ПО',
+            'Отдел управления процессами'
+          ]
+        }
+      ];
 
       function isOperatorType(type) {
         return type === 'rating5' || type === 'enps';
@@ -218,6 +707,7 @@
           var optionsSelect = document.createElement('select');
           optionsSelect.className = 'filterOptions';
           optionsSelect.multiple = true;
+          optionsSelect.style.display = 'none';
 
           question.options.forEach(function(value) {
             var option = document.createElement('option');
@@ -226,9 +716,180 @@
             optionsSelect.appendChild(option);
           });
 
+          var multiselectUI = buildMultiselectUI(optionsSelect);
+
+          if (question.question === DEPARTMENT_QUESTION_TITLE) {
+            editor.appendChild(renderDepartmentGroups(optionsSelect, multiselectUI.refresh));
+          }
+
           editor.appendChild(optionsSelect);
+          editor.appendChild(multiselectUI.element);
           editor.appendChild(renderModeRow());
         }
+      }
+
+      /**
+       * Визуальная надстройка над скрытым select[multiple].filterOptions:
+       * чипы выбранных значений, поиск по списку и чекбоксы. Сам select
+       * остаётся источником истины — addFilterFromEditor и синхронизация
+       * групп отделов продолжают читать/писать его через selectedOptions
+       * и option.selected, не зная о существовании этой надстройки.
+       */
+      function buildMultiselectUI(optionsSelect) {
+        var wrap = document.createElement('div');
+        wrap.className = 'multiselect-ui';
+
+        var chipBox = document.createElement('div');
+        chipBox.className = 'chip-box';
+
+        var search = document.createElement('input');
+        search.type = 'text';
+        search.className = 'search-input';
+        search.placeholder = 'Поиск…';
+
+        var list = document.createElement('div');
+        list.className = 'option-list';
+
+        var count = document.createElement('div');
+        count.className = 'count-badge';
+
+        var rows = [];
+
+        function toggleOption(option, checked) {
+          option.selected = checked;
+          optionsSelect.dispatchEvent(new Event('change'));
+          refresh();
+        }
+
+        Array.from(optionsSelect.options).forEach(function(option) {
+          var row = document.createElement('label');
+          row.className = 'option-row';
+
+          var checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+
+          checkbox.addEventListener('change', function() {
+            toggleOption(option, checkbox.checked);
+          });
+
+          row.appendChild(checkbox);
+          row.appendChild(document.createTextNode(option.value));
+          list.appendChild(row);
+
+          rows.push({ option: option, checkbox: checkbox, row: row });
+        });
+
+        search.addEventListener('input', function() {
+          var query = search.value.trim().toLowerCase();
+          rows.forEach(function(r) {
+            r.row.style.display = r.option.value.toLowerCase().indexOf(query) === -1 ? 'none' : '';
+          });
+        });
+
+        function refresh() {
+          chipBox.innerHTML = '';
+
+          var selected = Array.from(optionsSelect.selectedOptions);
+
+          selected.forEach(function(option) {
+            var chip = document.createElement('div');
+            chip.className = 'chip';
+            chip.appendChild(document.createTextNode(option.value));
+
+            var removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.textContent = '✕';
+            removeBtn.addEventListener('click', function() {
+              toggleOption(option, false);
+            });
+
+            chip.appendChild(removeBtn);
+            chipBox.appendChild(chip);
+          });
+
+          rows.forEach(function(r) {
+            r.checkbox.checked = r.option.selected;
+          });
+
+          count.textContent = 'Выбрано: ' + selected.length;
+        }
+
+        refresh();
+
+        wrap.appendChild(chipBox);
+        wrap.appendChild(search);
+        wrap.appendChild(list);
+        wrap.appendChild(count);
+
+        return { element: wrap, refresh: refresh };
+      }
+
+      /**
+       * Блок быстрого выбора управлений над списком отделов. Отмечает
+       * группу отделов заменой текущей выборки в select; выбор одной
+       * группы снимает отметку с другой. Ручное изменение самого select
+       * ниже синхронизирует отметки — группа остается отмеченной, только
+       * если её отделы выбраны в select точь-в-точь.
+       */
+      function renderDepartmentGroups(optionsSelect, onGroupApplied) {
+        var container = document.createElement('div');
+        container.className = 'dept-groups';
+
+        DEPARTMENT_GROUPS.forEach(function(group) {
+          var label = document.createElement('label');
+          label.className = 'dept-group-row';
+
+          var checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.className = 'deptGroupCheckbox';
+          checkbox.dataset.groupId = group.id;
+
+          checkbox.addEventListener('change', function() {
+            if (checkbox.checked) {
+              applyDepartmentGroup(group, optionsSelect, container);
+              if (onGroupApplied) {
+                onGroupApplied();
+              }
+            }
+          });
+
+          label.appendChild(checkbox);
+          label.appendChild(document.createTextNode(group.title));
+          container.appendChild(label);
+        });
+
+        optionsSelect.addEventListener('change', function() {
+          syncDepartmentGroupCheckboxes(optionsSelect, container);
+        });
+
+        return container;
+      }
+
+      function applyDepartmentGroup(group, optionsSelect, container) {
+        container.querySelectorAll('.deptGroupCheckbox').forEach(function(checkbox) {
+          checkbox.checked = checkbox.dataset.groupId === group.id;
+        });
+
+        Array.from(optionsSelect.options).forEach(function(option) {
+          option.selected = group.departments.indexOf(option.value) !== -1;
+        });
+      }
+
+      function syncDepartmentGroupCheckboxes(optionsSelect, container) {
+        var selectedValues = Array.from(optionsSelect.selectedOptions).map(function(o) {
+          return o.value;
+        });
+
+        container.querySelectorAll('.deptGroupCheckbox').forEach(function(checkbox) {
+          var group = DEPARTMENT_GROUPS.filter(function(g) {
+            return g.id === checkbox.dataset.groupId;
+          })[0];
+
+          checkbox.checked = group.departments.length === selectedValues.length &&
+            group.departments.every(function(department) {
+              return selectedValues.indexOf(department) !== -1;
+            });
+        });
       }
 
       /**
