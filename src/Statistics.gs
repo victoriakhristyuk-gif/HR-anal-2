@@ -244,18 +244,34 @@ const Statistics = {
   },
 
   /**
-   * ТОП-5 самых популярных ответов на открытый вопрос.
+   * ТОП-5 самых популярных ответов на открытый вопрос — из уже
+   * посчитанных полных частот (calculateAnswerFrequencies), а не по
+   * сырым строкам заново: те же частоты нужны и для сравнения годов,
+   * поэтому считаются один раз в ReportService и передаются сюда.
    * При равенстве количества сохраняется порядок появления
    * в данных (п.17 спеки).
+   *
+   * percent считается от validCount (количество респондентов с непустым
+   * ответом на вопрос), а не от суммы выборов — один респондент может
+   * выбрать несколько вариантов сразу, см. calculateAnswerFrequencies.
+   * Тот же знаменатель, что и в Comparison.compareTopAnswerItems, чтобы
+   * процент за текущий год и процент в сравнении годов означали одно и
+   * то же. Если валидных ответов на вопрос нет — percent null, а не
+   * фиктивный 0% (та же схема, что и в Comparison.gs).
    */
-  calculateTopAnswers(rows, headers, question, limit) {
-
-    const frequencies = this.calculateAnswerFrequencies(rows, headers, question);
+  selectTopAnswers(frequencies, limit) {
 
     return frequencies.items
       .slice()
       .sort((a, b) => b.count - a.count)
-      .slice(0, limit || 5);
+      .slice(0, limit || 5)
+      .map(item => ({
+        answer: item.answer,
+        count: item.count,
+        percent: frequencies.validCount > 0
+          ? Math.round(item.count / frequencies.validCount * 100)
+          : null
+      }));
 
   },
 

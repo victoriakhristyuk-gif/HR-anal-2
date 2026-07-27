@@ -3,10 +3,11 @@
  * Сравнение выборки 2026 с 2025
  * ==========================================================
  *
- * Не пересчитывает статистику самостоятельно — использует
- * уже существующие Statistics.calculateENPS/calculateAverageRatings,
- * применённые к двум выборкам, отфильтрованным одним и тем же
- * FilterEngine.applyFilters.
+ * Не пересчитывает статистику самостоятельно и вообще не обращается ни
+ * к Statistics, ни к сырым строкам выборок: получает уже готовые
+ * показатели обоих годов (посчитанные один раз в ReportService по двум
+ * выборкам, отфильтрованным одним и тем же FilterEngine.applyFilters) и
+ * только сопоставляет их между собой.
  */
 
 const Comparison = {
@@ -14,33 +15,31 @@ const Comparison = {
   /**
    * Собрать сравнительные данные.
    *
-   * distributions2026/distributions2025 — уже посчитанные ReportService
-   * через Statistics.calculateDistribution для каждого вопроса из
-   * Questions.getDistributionQuestions(); здесь они только сопоставляются,
-   * повторного расчета распределения нет.
+   * Ничего не считает по сырым строкам — на вход приходят только уже
+   * готовые показатели обоих годов, посчитанные ReportService через
+   * Statistics: eNPS и средние оценки (stats2026/stats2025),
+   * распределения по каждому вопросу из Questions.getDistributionQuestions()
+   * и полные частоты ответов вопросов Топ-5. Здесь они только
+   * сопоставляются между годами.
    *
-   * @param {Array<Array>} filteredData2026
-   * @param {Array<String>} headers2026
-   * @param {Array<Array>} filteredData2025
-   * @param {Array<String>} headers2025
+   * Раньше eNPS и средние оценки пересчитывались прямо здесь, хотя за
+   * текущий год вызывающая сторона уже посчитала ровно то же самое —
+   * это был лишний полный проход по данным каждого года.
+   *
+   * @param {Object} stats2026 - {employees, enps, averageRatings}
+   * @param {Object} stats2025 - {employees, enps, averageRatings}
    * @param {Array<Object>} distributions2026
    * @param {Array<Object>} distributions2025
    * @param {Array<Object>} topAnswerFrequencies2026 - {question, frequencies: {items, validCount}}
    * @param {Array<Object>} topAnswerFrequencies2025
    */
-  build(filteredData2026, headers2026, filteredData2025, headers2025, distributions2026, distributions2025, topAnswerFrequencies2026, topAnswerFrequencies2025) {
-
-    const enps2026 = Statistics.calculateENPS(filteredData2026, headers2026);
-    const enps2025 = Statistics.calculateENPS(filteredData2025, headers2025);
-
-    const averageRatings2026 = Statistics.calculateAverageRatings(filteredData2026, headers2026);
-    const averageRatings2025 = Statistics.calculateAverageRatings(filteredData2025, headers2025);
+  build(stats2026, stats2025, distributions2026, distributions2025, topAnswerFrequencies2026, topAnswerFrequencies2025) {
 
     return {
-      employees2026: filteredData2026.length,
-      employees2025: filteredData2025.length,
-      enps: this.compareENPS(enps2026, enps2025),
-      averageRatings: this.compareAverageRatings(averageRatings2026, averageRatings2025),
+      employees2026: stats2026.employees,
+      employees2025: stats2025.employees,
+      enps: this.compareENPS(stats2026.enps, stats2025.enps),
+      averageRatings: this.compareAverageRatings(stats2026.averageRatings, stats2025.averageRatings),
       distributions: this.compareDistributions(distributions2026 || [], distributions2025 || []),
       topAnswers: this.compareTopAnswers(topAnswerFrequencies2026 || [], topAnswerFrequencies2025 || [])
     };
@@ -156,6 +155,63 @@ const Comparison = {
   },
 
   /**
+   * К 2026 году несколько отделов были переименованы (и один вариант
+   * ответа 2025 года содержал опечатку) — реальные орг. изменения, не
+   * ошибка загрузки данных. Statistics.calculateDistribution считает
+   * распределение 2025 года по тому же фиксированному каталогу
+   * question.answers, что и 2026 (см. Statistics.getDistributionOrder_),
+   * и молча отбрасывает значения, которых там нет — поэтому старое
+   * название нужно привести к новому ДО расчета распределения, иначе
+   * сравнение по "Отделу" (Состав выборки) считало бы старый отдел
+   * пропавшим, а новый — появившимся с нуля. Используется только
+   * ReportService при подсчете distributions2025 для сравнения годов —
+   * сама filteredData2025 (сырые данные, фильтры, eNPS/средние оценки
+   * 2025) не трогается, здесь применяется только к копии строк.
+   */
+  DEPARTMENT_NAME_MAP_2025_TO_2026_: {
+    "Отдел сетевого администрирования": "Отдел сетевых технологий",
+    "Отдел локализации": "Отдел локализации и перевода",
+    "Отдел программируемых микрокотроллеров": "Отдел программируемых микроконтроллеров"
+  },
+
+  /**
+   * Копия rows с приведенным к 2026 названию отдела (см.
+   * DEPARTMENT_NAME_MAP_2025_TO_2026_) в столбце "Отдел" — для вызова
+   * Statistics.calculateDistribution по 2025 году. Если столбца "Отдел"
+   * нет в headers — возвращает rows как есть.
+   */
+  remapDepartmentRows_(rows, headers) {
+
+    const columnIndex = headers.findIndex(
+      header => Statistics.normalize_(header) === Statistics.normalize_("Отдел")
+    );
+
+    if (columnIndex === -1) {
+      return rows;
+    }
+
+    const normalizedMap = {};
+    Object.keys(this.DEPARTMENT_NAME_MAP_2025_TO_2026_).forEach(oldName => {
+      normalizedMap[Statistics.normalize_(oldName)] = this.DEPARTMENT_NAME_MAP_2025_TO_2026_[oldName];
+    });
+
+    return rows.map(row => {
+
+      const mappedAnswer = normalizedMap[Statistics.normalize_(row[columnIndex])];
+
+      if (!mappedAnswer) {
+        return row;
+      }
+
+      const newRow = row.slice();
+      newRow[columnIndex] = mappedAnswer;
+      return newRow;
+
+    });
+
+  },
+
+  /**
    * Сопоставить варианты ответа одного вопроса между годами.
    *
    * Процент каждого года считается Statistics.calculateDistribution
@@ -236,7 +292,7 @@ const Comparison = {
    * встретившихся хотя бы в одном году (один вариант может выбираться несколькими
    * респондентами одновременно — знаменатель "validCount" это количество
    * респондентов с непустым ответом на вопрос, как и в исходном
-   * Statistics.calculateTopAnswers/calculateAnswerFrequencies, а не сумма
+   * Statistics.selectTopAnswers/calculateAnswerFrequencies, а не сумма
    * выборов). Итоговый Топ-5 — это объединение top-5 по 2026 и top-5 по
    * 2025 (по count), чтобы вариант, выпавший из топа одного года из-за
    * ограничения в 5 позиций, не пропадал из сравнения.

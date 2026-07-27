@@ -20,7 +20,31 @@ function loadSurveyData(source, includeData) {
   throw new Error('Неизвестный источник данных: ' + source);
 }
 
+// Прочитанные листы-источники в пределах ОДНОГО запуска скрипта.
+// Пакетное построение вызывает buildReport по разу на значение фильтра,
+// и без кэша один и тот же лист ответов перечитывался бы целиком на
+// каждый отчет (18 отчетов — до 36 полных чтений), что упирается в лимит
+// времени выполнения Apps Script. Листы ответов при построении отчетов
+// не изменяются, поэтому в пределах запуска их содержимое неизменно.
+// Кэш живет ровно столько, сколько сам запуск: следующий вызов из
+// сайдбара стартует с пустым кэшем и читает свежие данные.
+var surveySheetCache_ = {};
+
 function loadSingleSheet_(spreadsheet, sheetName, sourceLabel, includeData) {
+  var cacheKey = sheetName + '|' + (includeData ? 'full' : 'meta');
+
+  if (surveySheetCache_.hasOwnProperty(cacheKey)) {
+    return surveySheetCache_[cacheKey];
+  }
+
+  var result = readSingleSheet_(spreadsheet, sheetName, sourceLabel, includeData);
+
+  surveySheetCache_[cacheKey] = result;
+
+  return result;
+}
+
+function readSingleSheet_(spreadsheet, sheetName, sourceLabel, includeData) {
   var sheet = spreadsheet.getSheetByName(sheetName);
 
   if (!sheet) {

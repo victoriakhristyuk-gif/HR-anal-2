@@ -32,8 +32,13 @@ function getFilterableQuestions(source) {
 }
 
 /**
- * Построить отчет
+ * Построить отчет.
+ *
+ * Если среди фильтров есть переведенные в режим "отдельный отчет на
+ * каждое значение", строится пакет отчетов — по одному обычному отчету
+ * на значение (см. BatchReports). Во всех остальных случаях, как и
+ * раньше, строится ровно один отчет.
  */
 function buildReportFromSidebar(source, filters, compareWith2025, customReportName) {
-  return buildReport(source, filters, compareWith2025, customReportName);
+  return BatchReports.run(source, filters, compareWith2025, customReportName);
 }

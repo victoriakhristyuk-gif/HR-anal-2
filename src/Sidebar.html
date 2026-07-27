@@ -78,6 +78,36 @@
       .operator-row input {
         margin-bottom: 0;
       }
+
+      .mode-row {
+        margin-bottom: 12px;
+      }
+
+      .mode-row label {
+        display: flex;
+        align-items: flex-start;
+        font-weight: normal;
+        margin-bottom: 4px;
+      }
+
+      .mode-row input[type="radio"] {
+        width: auto;
+        margin: 2px 6px 0 0;
+      }
+
+      .filter-item .filter-mode {
+        display: block;
+        color: #666;
+      }
+
+      .hint {
+        color: #666;
+        margin: -8px 0 12px;
+      }
+
+      .report-line {
+        margin-top: 2px;
+      }
     </style>
   </head>
   <body>
@@ -114,6 +144,9 @@
 
     <label for="reportName">Название отчета (необязательно)</label>
     <input type="text" id="reportName" placeholder="Например: Отдел продаж">
+    <div id="reportNameHint" class="hint" style="display:none;">
+      Отчетов будет несколько — каждый называется своим значением фильтра.
+    </div>
 
     <p>Проект успешно запущен.</p>
     <button type="button" id="buildReportBtn">Создать отчет</button>
@@ -122,6 +155,9 @@
     <div id="surveyInfo"></div>
 
     <script>
+      var SINGLE_MODE = 'single';
+      var SPLIT_MODE = 'split';
+
       var filterQuestions = [];
       var activeFilters = [];
 
@@ -191,7 +227,37 @@
           });
 
           editor.appendChild(optionsSelect);
+          editor.appendChild(renderModeRow());
         }
+      }
+
+      /**
+       * Режим работы мультиселект-фильтра. Первый вариант выбран всегда
+       * по умолчанию — при нем поведение полностью прежнее.
+       */
+      function renderModeRow() {
+        var row = document.createElement('div');
+        row.className = 'mode-row';
+
+        [
+          { value: SINGLE_MODE, text: 'Использовать выбранные значения как одну выборку' },
+          { value: SPLIT_MODE, text: 'Построить отдельный отчет для каждого выбранного значения' }
+        ].forEach(function(mode, index) {
+          var label = document.createElement('label');
+
+          var radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'filterMode';
+          radio.className = 'filterMode';
+          radio.value = mode.value;
+          radio.checked = index === 0;
+
+          label.appendChild(radio);
+          label.appendChild(document.createTextNode(mode.text));
+          row.appendChild(label);
+        });
+
+        return row;
       }
 
       function renderActiveFilters() {
@@ -212,8 +278,44 @@
             : filter.values.join(', ');
 
           block.appendChild(document.createTextNode(details));
+
+          if (isSplitFilter(filter)) {
+            var mode = document.createElement('span');
+            mode.className = 'filter-mode';
+            mode.textContent = 'Отдельный отчет для каждого значения: ' +
+              filter.values.length + ' шт.';
+            block.appendChild(mode);
+          }
+
           container.appendChild(block);
         });
+
+        updateReportNameState();
+      }
+
+      function isSplitFilter(filter) {
+        return filter.mode === SPLIT_MODE && !!filter.values && filter.values.length > 0;
+      }
+
+      function countBatchReports() {
+        return activeFilters.reduce(function(total, filter) {
+          return isSplitFilter(filter) ? total + filter.values.length : total;
+        }, 0);
+      }
+
+      /**
+       * Поле названия отключается, только если отчетов будет два и
+       * более: тогда каждый называется своим значением фильтра и общее
+       * название к ним неприменимо. Если пакетный режим включен, но
+       * значение выбрано одно, отчет в итоге один — название задается
+       * так же, как в обычном режиме.
+       */
+      function updateReportNameState() {
+        var isMultiReport = countBatchReports() > 1;
+        var reportName = document.getElementById('reportName');
+
+        reportName.disabled = isMultiReport;
+        document.getElementById('reportNameHint').style.display = isMultiReport ? '' : 'none';
       }
 
       function addFilterFromEditor() {
@@ -259,7 +361,8 @@
           activeFilters.push({
             question: question.question,
             type: question.type,
-            values: values
+            values: values,
+            mode: document.querySelector('.filterMode:checked').value
           });
         }
 
@@ -318,6 +421,82 @@
           : filter.question + '=' + filter.values.join(', ');
       }
 
+      /**
+       * Предпросмотр единственного отчета — прежний вид сайдбара.
+       */
+      function renderSingleResult(infoEl, source, report) {
+        var filtersText = report.filters.length
+          ? report.filters.map(formatFilterText).join('; ')
+          : 'Без фильтров';
+
+        // Отчет построен в любом случае — если не обновилась только
+        // сводная аналитика, об этом сообщается отдельной строкой,
+        // а не общей ошибкой: иначе выглядело бы так, будто отчет
+        // не создан.
+        var summaryWarning = report.summaryError
+          ? '<br><br><span class="error">Сводная аналитика не обновлена: ' +
+            report.summaryError + '</span>'
+          : '';
+
+        infoEl.innerHTML =
+          '<b>Предпросмотр выборки</b><br><br>' +
+          'Источник: ' + source + '<br>' +
+          'Количество сотрудников: ' + report.employees + '<br><br>' +
+          'Фильтры: ' + filtersText +
+          summaryWarning;
+      }
+
+      /**
+       * Сводка по пакету: сколько отчетов построено и что с каждым
+       * значением. Значение, на котором построение упало, показывается
+       * с причиной и не скрывает остальные — они построены.
+       */
+      function renderBatchResult(infoEl, result) {
+        var built = result.reports.filter(function(report) {
+          return report.ok;
+        });
+
+        infoEl.innerHTML = '';
+
+        var title = document.createElement('b');
+        title.textContent = 'Построено отчетов: ' + built.length +
+          (built.length === result.reports.length ? '' : ' из ' + result.reports.length);
+        infoEl.appendChild(title);
+
+        result.reports.forEach(function(report) {
+          var line = document.createElement('div');
+          line.className = 'report-line';
+
+          if (!report.ok) {
+            line.className += ' error';
+            line.textContent = '✗ ' + report.label + ' — ' + report.error;
+            infoEl.appendChild(line);
+            return;
+          }
+
+          // Имя листа показывается, только если оно отличается от
+          // значения фильтра (например, к нему добавился суффикс из-за
+          // уже существующего одноименного листа) — иначе это повтор.
+          var sheetSuffix = report.sheetName === report.label
+            ? ''
+            : ' → лист "' + report.sheetName + '"';
+
+          line.textContent = '✓ ' + report.label +
+            ' (' + report.employees + ')' + sheetSuffix;
+
+          if (report.summaryError) {
+            line.title = 'Сводная аналитика не обновлена: ' + report.summaryError;
+
+            var warning = document.createElement('span');
+            warning.className = 'error';
+            warning.textContent = ' — сводная аналитика не обновлена';
+            line.appendChild(warning);
+          }
+
+          infoEl.appendChild(line);
+        });
+      }
+
       document.getElementById('questionSelect').addEventListener('change', renderFilterEditor);
       document.getElementById('addFilterBtn').addEventListener('click', addFilterFromEditor);
       document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
@@ -332,21 +511,20 @@
         var compareWith2025 = document.getElementById('compareWith2025').checked;
         var customReportName = document.getElementById('reportName').value;
         var infoEl = document.getElementById('surveyInfo');
+        var batchCount = countBatchReports();
         infoEl.className = '';
-        infoEl.textContent = 'Построение отчета...';
+        infoEl.textContent = batchCount > 1
+          ? 'Построение отчетов (' + batchCount + ')...'
+          : 'Построение отчета...';
 
         google.script.run
           .withSuccessHandler(function(result) {
 
-            var filtersText = result.filters.length
-              ? result.filters.map(formatFilterText).join('; ')
-              : 'Без фильтров';
-
-            infoEl.innerHTML =
-              '<b>Предпросмотр выборки</b><br><br>' +
-              'Источник: ' + result.source + '<br>' +
-              'Количество сотрудников: ' + result.employees + '<br><br>' +
-              'Фильтры: ' + filtersText;
+            if (result.batch) {
+              renderBatchResult(infoEl, result);
+            } else {
+              renderSingleResult(infoEl, result.source, result.reports[0]);
+            }
 
           })
           .withFailureHandler(function(error) {

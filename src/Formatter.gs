@@ -6,36 +6,106 @@
 
 const Formatter = {
 
+  // ----------------------------------------------------------------
+  // Палитра редизайна отчета (макет "Вар3 светлый, средний отступ").
+  // Используется ТОЛЬКО новыми report*/apply* методами ниже — методы,
+  // которые переиспользует Summary.gs (applyBaseFont/formatTableHeader/
+  // freezeHeader), палитру не трогают и остаются как были, чтобы не
+  // затронуть внешний вид сводного листа (см. Summary.gs).
+  // ----------------------------------------------------------------
+  REPORT_FONT: "Calibri",
+  TITLE_BG: "#2F6169",
+  SECTION_BAND_BG: "#2F6169",
+  LABEL_TEXT_COLOR: "#3D5A73",
+  ACCENT_TEAL: "#3FB8B1",
+  STRIPE_BG: "#F2F7F7",
+  HIGHLIGHT_BG: "#EAF6F6",
+  HIGHLIGHT_TEXT_COLOR: "#2C4054",
+  MUTED_TEXT_COLOR: "#8C97A1",
+
   /**
-   * Базовый шрифт для всего отчета
+   * Базовый шрифт для всего отчета (используется и Summary.gs — состав
+   * и размер шрифта менять нельзя, см. REPORT_FONT/applyReportBaseFont
+   * для нового вида отчетов ReportBuilder).
    */
   applyBaseFont(range) {
     range.setFontFamily("Arial").setFontSize(10);
   },
 
   /**
-   * Главный заголовок отчета (16 pt, жирный)
+   * Базовый шрифт отчета ReportBuilder по новому макету — Calibri,
+   * вместо applyBaseFont (тот переиспользует Summary.gs и не меняется).
    */
-  formatMainTitle(range) {
-    range.setFontSize(16).setFontWeight("bold");
+  applyReportBaseFont(range) {
+    range.setFontFamily(this.REPORT_FONT).setFontSize(10);
   },
 
   /**
-   * Название раздела (13 pt, жирный)
+   * Главный заголовок отчета — синяя полоса на всю ширину, белый
+   * жирный текст по центру (см. C1 макета). sheet нужен для
+   * mergeAcross/высоты строки — сам заголовок пишется в одну ячейку
+   * (см. ReportBuilder.renderHeader_), а полоса должна визуально
+   * закрывать всю ширину таблицы.
    */
-  formatSectionTitle(range) {
-    range.setFontSize(13).setFontWeight("bold");
+  formatReportMainTitle(sheet, range) {
+    range
+      .setFontFamily(this.REPORT_FONT)
+      .setFontSize(13)
+      .setFontWeight("bold")
+      .setFontColor("#FFFFFF")
+      .setBackground(this.TITLE_BG)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle")
+      .mergeAcross();
+    sheet.setRowHeight(range.getRow(), 33.75);
   },
 
   /**
-   * Подпись-метка (жирный текст)
+   * Название раздела — та же полоса-баннер, что и главный заголовок, но
+   * чуть менее ярким синим (см. C5/C10/C18 макета: "Short Summary",
+   * "КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ", "Состав выборки" и т.д.). Шрифт/размер — те
+   * же, что у главного заголовка (formatReportMainTitle), для единого
+   * вида всех названий блоков; полоса главного заголовка выделяется
+   * большей высотой строки и выравниванием по центру (а не слева, как
+   * у заголовков разделов).
    */
-  formatLabel(range) {
-    range.setFontWeight("bold");
+  formatSectionTitle(sheet, range) {
+    range
+      .setFontFamily(this.REPORT_FONT)
+      .setFontSize(13)
+      .setFontWeight("bold")
+      .setFontColor("#FFFFFF")
+      .setBackground(this.SECTION_BAND_BG)
+      .setHorizontalAlignment("left")
+      .setVerticalAlignment("middle")
+      .mergeAcross();
+    sheet.setRowHeight(range.getRow(), 24);
   },
 
   /**
-   * Заголовок таблицы: жирный текст, светло-серый фон
+   * Подпись-метка подраздела ("Город", "⭐ eNPS", "🏢 Офис" и т.д.) —
+   * синий жирный текст с тонким бирюзовым подчеркиванием (см. C11/C19
+   * макета). НЕ путать с обычным жирным текстом строки списка (см.
+   * ReportBuilder.renderAverageScoreRankItem_/renderRankedAnswerList_ —
+   * там жирный текст строки рейтинга оформляется отдельно, не через
+   * formatLabel, кроме заголовка самого пункта рейтинга, который по
+   * макету — такая же подпись-подраздел).
+   */
+  formatLabel(sheet, range) {
+    range
+      .setFontFamily(this.REPORT_FONT)
+      .setFontSize(11)
+      .setFontWeight("bold")
+      .setFontColor(this.LABEL_TEXT_COLOR)
+      .setBorder(false, false, true, false, false, false, this.ACCENT_TEAL, SpreadsheetApp.BorderStyle.SOLID);
+    sheet.setRowHeight(range.getRow(), 18);
+  },
+
+  /**
+   * Заголовок таблицы: жирный текст, светло-серый фон. Используется и
+   * Summary.gs — вид менять нельзя (см. applyBaseFont). Для нового
+   * вида мини-таблиц отчета ReportBuilder см. formatReportTableHeader/
+   * formatRawDataHeader.
    */
   formatTableHeader(range) {
     range
@@ -44,10 +114,72 @@ const Formatter = {
   },
 
   /**
-   * Крупное выделенное число (например, итоговый eNPS)
+   * Заголовок мини-таблицы отчета ("Ответ" / "2026" / "Δ") — белый
+   * жирный текст на бирюзовом фоне (см. C13/D13 макета).
+   */
+  formatReportTableHeader(range) {
+    range
+      .setFontFamily(this.REPORT_FONT)
+      .setFontSize(9)
+      .setFontWeight("bold")
+      .setFontColor("#FFFFFF")
+      .setBackground(this.ACCENT_TEAL);
+  },
+
+  /**
+   * Заголовок таблицы "Сырые данные" — та же бирюзовая заливка, что и
+   * formatReportTableHeader, но крупнее (10pt), без переноса текста и с
+   * фиксированной высотой строки (см. C526.. макета).
+   */
+  formatRawDataHeader(sheet, range) {
+    range
+      .setFontFamily(this.REPORT_FONT)
+      .setFontSize(10)
+      .setFontWeight("bold")
+      .setFontColor("#FFFFFF")
+      .setBackground(this.ACCENT_TEAL)
+      .setHorizontalAlignment("left")
+      .setVerticalAlignment("middle")
+      .setWrap(false);
+    sheet.setRowHeight(range.getRow(), 18);
+  },
+
+  /**
+   * Крупное выделенное число (например, итоговый eNPS) — простой
+   * вариант без карточки (фон/рамка), см. applyReportHighlightCard для
+   * нового вида по макету.
    */
   formatHighlightNumber(range) {
     range.setFontSize(18).setFontWeight("bold");
+  },
+
+  /**
+   * KPI-карточка крупного выделенного числа (eNPS, средняя оценка) —
+   * бирюзовая рамка, бледно-бирюзовый фон, крупный жирный текст по
+   * центру (см. C12/C358 макета).
+   */
+  applyReportHighlightCard(sheet, range) {
+    range
+      .setFontFamily(this.REPORT_FONT)
+      .setFontSize(22)
+      .setFontWeight("bold")
+      .setFontColor(this.HIGHLIGHT_TEXT_COLOR)
+      .setBackground(this.HIGHLIGHT_BG)
+      .setBorder(true, true, true, true, false, false, this.ACCENT_TEAL, SpreadsheetApp.BorderStyle.SOLID)
+      .setHorizontalAlignment("center")
+      .setVerticalAlignment("middle");
+    sheet.setRowHeight(range.getRow(), 25.5);
+  },
+
+  /**
+   * Чередующаяся заливка строк компактного списка ("зебра") — четные
+   * (0-based) строки списка без заливки, нечетные — светло-серо-голубым
+   * фоном (см. STRIPE_BG). rowIndex — позиция строки внутри конкретного
+   * списка (с нуля), а не номер строки листа — у каждого списка своя
+   * независимая нумерация.
+   */
+  applyZebraStripe(range, rowIndex) {
+    range.setBackground(rowIndex % 2 === 1 ? this.STRIPE_BG : null);
   },
 
   /**
@@ -197,21 +329,27 @@ const Formatter = {
   },
 
   /**
-   * Мини-полоса прогресса 0..100% в ячейке: "██████████░░░░░░░░" —
-   * закрашенная часть (segments * percent/100, зеленый) отражает
-   * percent, остаток до конца полосы — светло-серый. Реализовано через
+   * Мини-полоса прогресса 0..100% в ячейке: "█████░░░" — длина всей
+   * полосы (segments * percent/100, зеленый) отражает percent, дальше
+   * ячейка остается пустой (без серого "хвоста" на всю ширину) — по
+   * этому длина полосы у разных строк отличается и явно читается на
+   * глаз, как на остальных полосах отчета. Реализовано через
    * RichTextValue (посимвольная заливка одной строки из блочных
    * символов), а не SPARKLINE — так полоса выглядит как ряд сегментов,
    * а не как непрерывный залитый прямоугольник.
    */
-  setBlockProgressBar(cell, percent, segments) {
+  setBlockProgressBar(cell, percent, segments, color) {
 
-    // 11 сегментов + уменьшенный (9pt вместо базовых 10pt) шрифт —
-    // подобрано так, чтобы полоса помещалась в стандартную ширину
-    // столбца отчета (110px, см. ReportBuilder createReport/
-    // setColumnWidths) с небольшим правым запасом (4-8px), и последний
-    // серый сегмент не касался границы ячейки.
-    const total = segments || 11;
+    // 8 сегментов + уменьшенный (9pt вместо базовых 10pt) шрифт —
+    // подобрано с запасом, чтобы полоса даже при 100% не доходила до
+    // границы стандартной ширины столбца отчета (110px, см.
+    // ReportBuilder createReport/setColumnWidths). color — цвет
+    // закрашенных сегментов (по умолчанию базовый зеленый) — вызывающая
+    // сторона может передать цвет по смыслу категории (например,
+    // зеленый/желтый/красный у категорий eNPS, бирюзовый у обычных
+    // Да/Нет списков), это знание о предметной области отчета, а не об
+    // оформлении.
+    const total = segments || 8;
     const fontSize = 9;
     const clamped = Math.max(0, Math.min(100, percent || 0));
     // Ненулевой процент никогда не округляется до 0 сегментов — иначе
@@ -220,21 +358,21 @@ const Formatter = {
     if (filled === 0 && clamped > 0) {
       filled = 1;
     }
-    const text = "█".repeat(total);
 
-    const builder = SpreadsheetApp.newRichTextValue().setText(text);
+    const builder = SpreadsheetApp.newRichTextValue().setText("█".repeat(filled));
 
     if (filled > 0) {
       builder.setTextStyle(0, filled,
-        SpreadsheetApp.newTextStyle().setForegroundColor("#34a853").setFontSize(fontSize).build());
-    }
-
-    if (filled < total) {
-      builder.setTextStyle(filled, total,
-        SpreadsheetApp.newTextStyle().setForegroundColor("#d9d9d9").setFontSize(fontSize).build());
+        SpreadsheetApp.newTextStyle().setForegroundColor(color || "#34a853").setFontSize(fontSize).build());
     }
 
     cell.setRichTextValue(builder.build());
+
+    // Обрезаем полосу по границе ячейки (а не даем ей "переливаться" в
+    // соседнюю пустую ячейку) — иначе при малейшем расхождении реальной
+    // ширины символов с расчетом (шрифт/масштаб/DPI) полоса визуально
+    // выходит за пределы своей колонки.
+    cell.setWrapStrategy(SpreadsheetApp.WrapStrategy.CLIP);
 
   },
 
@@ -243,12 +381,28 @@ const Formatter = {
    * основным (2026) списком, где акцент намеренно смещен на текущий год.
    */
   formatMutedSmall(range) {
-    range.setFontColor("#999999").setFontSize(9);
+    range.setFontFamily(this.REPORT_FONT).setFontColor(this.MUTED_TEXT_COLOR).setFontSize(9);
   },
 
-  DELTA_GOOD_COLOR: "#38761d",
-  DELTA_BAD_COLOR: "#cc0000",
-  DELTA_NEUTRAL_COLOR: "#666666",
+  /**
+   * Ячейка с текстом "префикс + остальной текст", где префикс выделен
+   * своим цветом и жирным, а остальной текст — обычным (например,
+   * "Самые высокие показатели: " зеленым перед списком значений).
+   */
+  setColoredPrefixText(cell, prefix, rest, prefixColor) {
+
+    const builder = SpreadsheetApp.newRichTextValue().setText(prefix + rest);
+
+    builder.setTextStyle(0, prefix.length,
+      SpreadsheetApp.newTextStyle().setForegroundColor(prefixColor).setBold(true).build());
+
+    cell.setRichTextValue(builder.build());
+
+  },
+
+  DELTA_GOOD_COLOR: "#1F8A5F",
+  DELTA_BAD_COLOR: "#D1483A",
+  DELTA_NEUTRAL_COLOR: "#808A94",
 
   /**
    * Цвет текста Δ по смыслу изменения, а не только по математическому

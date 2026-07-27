@@ -57,7 +57,7 @@ const ReportBuilder = {
     // удалении листа его developer metadata удаляется вместе с ним.
     sheet.addDeveloperMetadata(this.REPORT_KEY_METADATA_KEY, reportKey);
 
-    Formatter.applyBaseFont(sheet.getRange("A1:F50"));
+    Formatter.applyReportBaseFont(sheet.getRange("A1:F50"));
     Formatter.setColumnWidths(sheet, [320, 110, 110, 110, 110, 110]);
 
     // ctx.row — "курсор" текущей свободной строки. Каждый render-метод
@@ -89,6 +89,16 @@ const ReportBuilder = {
 
     Formatter.freezeHeader(sheet, frozenRows, 0);
 
+    // Визуальное центрирование: весь уже построенный отчет (со всем
+    // форматированием и группировкой строк) целиком сдвигается на два
+    // столбца вправо, поэтому контент начинается с колонки C, а не A.
+    // Сами столбцы-отступы A/B делаются узкими (не стандартной ширины),
+    // чтобы отступ был небольшим, как в макете.
+    sheet.insertColumns(1, 2);
+    sheet.setColumnWidth(1, 40);
+    sheet.setColumnWidth(2, 40);
+    sheet.getRange(1, 1, sheet.getMaxRows(), 2).setBackground(null);
+
     return sheet;
 
   },
@@ -105,8 +115,9 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
 
-    sheet.getRange(ctx.row, 1).setValue(sheet.getName());
-    Formatter.formatMainTitle(sheet.getRange(ctx.row, 1));
+    const range = sheet.getRange(ctx.row, 1, 1, 6);
+    range.setValue(sheet.getName());
+    Formatter.formatReportMainTitle(sheet, range);
 
     ctx.row += 1;
 
@@ -127,9 +138,11 @@ const ReportBuilder = {
       ? activeFilters.join("; ")
       : "без фильтров";
 
-    sheet.getRange(ctx.row, 1).setValue(
+    const sourceLineCell = sheet.getRange(ctx.row, 1);
+    sourceLineCell.setValue(
       "Источник: " + reportData.source + " · Фильтры: " + filtersText
     );
+    sourceLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
 
     const sampleText = reportData.comparison
@@ -137,7 +150,9 @@ const ReportBuilder = {
         "; 2025 — n=" + reportData.comparison.employees2025
       : "Размер выборки: n=" + reportData.employees;
 
-    sheet.getRange(ctx.row, 1).setValue(sampleText);
+    const sampleLineCell = sheet.getRange(ctx.row, 1);
+    sampleLineCell.setValue(sampleText);
+    sampleLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
 
     ctx.row += 1; // пустая строка-разделитель
@@ -183,28 +198,41 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
 
-    sheet.getRange(ctx.row, 1).setValue("Short Summary");
-    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue("Short Summary");
+    Formatter.formatSectionTitle(sheet, titleRange);
     ctx.row += 1;
 
-    sheet.getRange(ctx.row, 1).setValue(this.buildEnpsSummaryLine_(reportData));
+    let lineIndex = 0;
+
+    const enpsLineCell = sheet.getRange(ctx.row, 1);
+    enpsLineCell.setValue(this.buildEnpsSummaryLine_(reportData));
+    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
     ctx.row += 1;
 
     const sortedDesc = reportData.averageRatings.slice().sort((a, b) => b.average - a.average);
     const sortedAsc = reportData.averageRatings.slice().sort((a, b) => a.average - b.average);
 
-    sheet.getRange(ctx.row, 1).setValue(
-      "Самые высокие показатели: " + this.formatRatingList_(sortedDesc.slice(0, 3))
+    const highLineCell = sheet.getRange(ctx.row, 1);
+    Formatter.setColoredPrefixText(
+      highLineCell, "Самые высокие показатели: ",
+      this.formatRatingList_(sortedDesc.slice(0, 3)), Formatter.DELTA_GOOD_COLOR
     );
+    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
     ctx.row += 1;
 
-    sheet.getRange(ctx.row, 1).setValue(
-      "Самые низкие показатели: " + this.formatRatingList_(sortedAsc.slice(0, 3))
+    const lowLineCell = sheet.getRange(ctx.row, 1);
+    Formatter.setColoredPrefixText(
+      lowLineCell, "Самые низкие показатели: ",
+      this.formatRatingList_(sortedAsc.slice(0, 3)), Formatter.DELTA_BAD_COLOR
     );
+    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
     ctx.row += 1;
 
     if (reportData.comparison) {
-      sheet.getRange(ctx.row, 1).setValue(this.buildDynamicsSummaryLine_(reportData));
+      const dynamicsLineCell = sheet.getRange(ctx.row, 1);
+      dynamicsLineCell.setValue(this.buildDynamicsSummaryLine_(reportData));
+      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
       ctx.row += 1;
     }
 
@@ -299,8 +327,9 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
 
-    sheet.getRange(ctx.row, 1).setValue("КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ");
-    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue("КЛЮЧЕВЫЕ ПОКАЗАТЕЛИ");
+    Formatter.formatSectionTitle(sheet, titleRange);
     ctx.row += 1;
 
     this.renderEnpsIndicator_(ctx, reportData);
@@ -311,9 +340,9 @@ const ReportBuilder = {
   // ключи Statistics.calculateENPS/Comparison.compareEnpsCategories_
   // ("promoters"/"neutrals"/"detractors") и их отображение.
   ENPS_CATEGORY_META_: {
-    promoters: { emoji: "🟢", label: "Промоутеры" },
-    neutrals: { emoji: "🟡", label: "Нейтралы" },
-    detractors: { emoji: "🔴", label: "Критики" }
+    promoters: { emoji: "🟢", label: "Промоутеры", barColor: "#2FA67E" },
+    neutrals: { emoji: "🟡", label: "Нейтралы", barColor: "#E0AC3E" },
+    detractors: { emoji: "🔴", label: "Критики", barColor: "#D1483A" }
   },
 
   /**
@@ -337,19 +366,20 @@ const ReportBuilder = {
     const comparisonEnps = reportData.comparison ? reportData.comparison.enps : null;
     const categories = ["promoters", "neutrals", "detractors"];
 
-    sheet.getRange(ctx.row, 1).setValue("⭐ eNPS");
-    Formatter.formatLabel(sheet.getRange(ctx.row, 1));
+    const labelRange = sheet.getRange(ctx.row, 1);
+    labelRange.setValue("⭐ eNPS");
+    Formatter.formatLabel(sheet, labelRange);
     ctx.row += 1;
 
     const valueCell = sheet.getRange(ctx.row, 1);
     valueCell.setValue(enps.enps);
-    Formatter.formatHighlightNumber(valueCell);
+    Formatter.applyReportHighlightCard(sheet, valueCell);
     Formatter.applySignedIntegerFormat(valueCell);
 
     if (comparisonEnps && comparisonEnps.delta !== null && comparisonEnps.delta !== undefined) {
       const deltaCell = sheet.getRange(ctx.row, 2);
       deltaCell.setValue(comparisonEnps.delta);
-      deltaCell.setFontWeight("bold");
+      deltaCell.setFontSize(11).setFontWeight("bold").setHorizontalAlignment("center");
       Formatter.applyCompactDeltaNumberFormat(deltaCell);
       Formatter.setDeltaFontColor(deltaCell, comparisonEnps.delta, "up");
     }
@@ -358,9 +388,9 @@ const ReportBuilder = {
       const value2025Cell = sheet.getRange(ctx.row, 3);
       value2025Cell.setValue("(2025: " + this.formatSignedInt_(comparisonEnps.value2025) + ")");
       Formatter.formatMutedSmall(value2025Cell);
+      value2025Cell.setHorizontalAlignment("center");
     }
 
-    Formatter.addBottomBorder(sheet.getRange(ctx.row, 1, 1, 3), "#cccccc");
     ctx.row += 1;
 
     const comparisonByCategory = {};
@@ -376,7 +406,9 @@ const ReportBuilder = {
 
     this.renderCompactAnswerList_(
       ctx, items, false,
-      category => this.ENPS_CATEGORY_META_[category].emoji + " " + this.ENPS_CATEGORY_META_[category].label
+      category => this.ENPS_CATEGORY_META_[category].emoji + " " + this.ENPS_CATEGORY_META_[category].label,
+      null,
+      category => this.ENPS_CATEGORY_META_[category].barColor
     );
 
     if (comparisonEnps) {
@@ -422,8 +454,9 @@ const ReportBuilder = {
     const byQuestion = {};
     rows.forEach(row => { byQuestion[row.question] = row; });
 
-    sheet.getRange(ctx.row, 1).setValue("Средние оценки");
-    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue("📊 Средние оценки");
+    Formatter.formatSectionTitle(sheet, titleRange);
     ctx.row += 1;
     ctx.row += 1; // пустая строка-разделитель
 
@@ -618,16 +651,21 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
 
-    sheet.getRange(ctx.row, 1).setValue(icon + " " + groupName);
-    Formatter.formatLabel(sheet.getRange(ctx.row, 1));
+    const labelRange = sheet.getRange(ctx.row, 1);
+    labelRange.setValue(icon + " " + groupName);
+    Formatter.formatLabel(sheet, labelRange);
     ctx.row += 1;
 
     if (groupRows.length > 1) {
       this.renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison);
     }
 
+    let zebraIndex = 0;
+
     groupRows.forEach(row => {
-      this.renderAverageScoreRankItem_(ctx, row, hasComparison, coverageByQuestion[row.question]);
+      zebraIndex = this.renderAverageScoreRankItem_(
+        ctx, row, hasComparison, coverageByQuestion[row.question], zebraIndex
+      );
     });
 
   },
@@ -665,17 +703,16 @@ const ReportBuilder = {
 
       const deltaCell = sheet.getRange(ctx.row, 3);
       deltaCell.setValue(delta);
+      deltaCell.setHorizontalAlignment("center");
       Formatter.applyCompactDeltaTwoDecimalFormat(deltaCell);
       Formatter.setDeltaFontColor(deltaCell, delta, "up");
 
     } else {
       valueCell.setValue(value2026);
-      Formatter.formatHighlightNumber(valueCell);
+      valueCell.setFontWeight("bold").setHorizontalAlignment("right");
     }
 
     ctx.row += 1;
-
-    Formatter.addBottomBorder(sheet.getRange(ctx.row - 1, 1, 1, 3), "#cccccc");
     ctx.row += 1; // пустая строка-разделитель перед ранжированным списком
 
   },
@@ -702,13 +739,21 @@ const ReportBuilder = {
    * ("Не пользовались: 298 (71%)"): мелкий серый неполужирный текст,
    * ширина блока не меняется (текст остается в первой колонке).
    */
-  renderAverageScoreRankItem_(ctx, row, hasComparison, coverageInfo) {
+  renderAverageScoreRankItem_(ctx, row, hasComparison, coverageInfo, zebraIndex) {
 
     const sheet = ctx.sheet;
     const itemRow = ctx.row;
+    let nextZebraIndex = zebraIndex;
 
+    // Название вопроса — обычный жирный текст строки списка, НЕ
+    // подпись-подраздел (Formatter.formatLabel): в макете эта строка
+    // выглядит как остальные строки компактных списков (см. C327 "Атмосфера
+    // в офисе" — 10pt жирный, без синего цвета/подчеркивания), в отличие от
+    // заголовка самой группы ("🏢 Офис", см. renderAverageScoreGroup_) и от
+    // заголовка пункта рейтинга Топ-5 (см. renderRankedAnswerList_), где
+    // formatLabel — как раз то, что нужно.
     sheet.getRange(itemRow, 1).setValue(row.question);
-    Formatter.formatLabel(sheet.getRange(itemRow, 1));
+    sheet.getRange(itemRow, 1).setFontWeight("bold");
 
     const valueCell = sheet.getRange(itemRow, 2);
 
@@ -719,17 +764,19 @@ const ReportBuilder = {
       valueCell.setValue(row.value2026 !== null && row.value2026 !== undefined ? row.value2026 : "н/д");
       valueCell.setFontWeight("bold");
     }
+    valueCell.setHorizontalAlignment("right");
 
     if (hasComparison && row.delta !== null && row.delta !== undefined) {
 
       const deltaCell = sheet.getRange(itemRow, 3);
       deltaCell.setValue(row.delta);
-      deltaCell.setFontWeight("bold");
+      deltaCell.setFontWeight("bold").setHorizontalAlignment("center");
       Formatter.applyCompactDeltaTwoDecimalFormat(deltaCell);
       Formatter.setDeltaFontColor(deltaCell, row.delta, "up");
 
     }
 
+    Formatter.applyZebraStripe(sheet.getRange(itemRow, 1, 1, 3), nextZebraIndex++);
     ctx.row += 1;
 
     if (coverageInfo) {
@@ -741,10 +788,13 @@ const ReportBuilder = {
       const coverageCell = sheet.getRange(ctx.row, 1);
       coverageCell.setValue(coverageInfo.label + ": " + coverageText);
       Formatter.formatMutedSmall(coverageCell);
+      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 3), nextZebraIndex++);
 
       ctx.row += 1;
 
     }
+
+    return nextZebraIndex;
 
   },
 
@@ -788,11 +838,15 @@ const ReportBuilder = {
   },
 
   /**
-   * То же самое, что setRatingWithPreviousYear_, но для KPI "Средняя
-   * оценка раздела" — значение крупным жирным (18pt, как
-   * Formatter.formatHighlightNumber), "(2025: X)" рядом мелким серым
-   * (как Formatter.formatMutedSmall), в той же ячейке — строка читается
-   * как единый показатель, а не три независимых элемента. Δ остается
+   * То же самое, что setRatingWithPreviousYear_, но с другой подписью
+   * прошлогоднего значения ("(2025: X)" вместо "(X)") — для KPI
+   * "Средняя оценка раздела": значение жирным обычным размером,
+   * "(2025: X)" рядом мелким серым (как Formatter.formatMutedSmall), в
+   * той же ячейке — строка читается как единый показатель, а не три
+   * независимых элемента. Не крупная карточка (в отличие от "⭐ Средняя
+   * оценка" внутри вопроса, см. renderInlineAverage_/
+   * Formatter.applyReportHighlightCard) — по макету это компактная
+   * строка обзора, а не отдельный акцентный показатель. Δ остается
    * соседней ячейкой, здесь не участвует.
    */
   setKpiValueWithPreviousYear_(cell, value2026, value2025) {
@@ -805,7 +859,7 @@ const ReportBuilder = {
       .setText(fullText)
       .setTextStyle(
         0, currentText.length,
-        SpreadsheetApp.newTextStyle().setBold(true).setFontSize(18).build()
+        SpreadsheetApp.newTextStyle().setBold(true).build()
       )
       .setTextStyle(
         currentText.length, fullText.length,
@@ -814,6 +868,7 @@ const ReportBuilder = {
       .build();
 
     cell.setRichTextValue(richText);
+    cell.setHorizontalAlignment("right");
 
   },
 
@@ -942,8 +997,9 @@ const ReportBuilder = {
     const sectionStartRow = ctx.row;
     const title = section.indent ? "    " + section.name : section.name;
 
-    sheet.getRange(ctx.row, 1).setValue(title);
-    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue(title);
+    Formatter.formatSectionTitle(sheet, titleRange);
     ctx.row += 1;
 
     section.questions.forEach(question => {
@@ -1031,8 +1087,9 @@ const ReportBuilder = {
       return;
     }
 
-    sheet.getRange(ctx.row, 1).setValue(question.title);
-    Formatter.formatLabel(sheet.getRange(ctx.row, 1));
+    const questionLabelRange = sheet.getRange(ctx.row, 1);
+    questionLabelRange.setValue(question.title);
+    Formatter.formatLabel(sheet, questionLabelRange);
     ctx.row += 1;
 
     if (question.average) {
@@ -1216,18 +1273,23 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
 
-    sheet.getRange(ctx.row, 1).setValue(blockConfig.title);
-    Formatter.formatLabel(sheet.getRange(ctx.row, 1));
+    const blockLabelRange = sheet.getRange(ctx.row, 1);
+    blockLabelRange.setValue(blockConfig.title);
+    Formatter.formatLabel(sheet, blockLabelRange);
     ctx.row += 1;
 
+    let zebraIndex = 0;
+
     if (blockConfig.subheading) {
-      sheet.getRange(ctx.row, 1).setValue(blockConfig.subheading);
+      const subheadingRange = sheet.getRange(ctx.row, 1);
+      subheadingRange.setValue(blockConfig.subheading);
+      Formatter.applyZebraStripe(subheadingRange, zebraIndex++);
       ctx.row += 1;
     }
 
     const buckets = this.aggregateAnswerBuckets_(items, blockConfig.buckets);
 
-    this.renderAggregateKpiRows_(ctx, buckets, hasComparison);
+    this.renderAggregateKpiRows_(ctx, buckets, hasComparison, zebraIndex);
 
     ctx.row += 1; // одна пустая строка между KPI-карточкой и детализацией
 
@@ -1309,10 +1371,12 @@ const ReportBuilder = {
    * числа: например, снижение "Повышенный риск" или "Не устраивают" —
    * улучшение и красится зеленым, а не красным.
    */
-  renderAggregateKpiRows_(ctx, buckets, hasComparison) {
+  renderAggregateKpiRows_(ctx, buckets, hasComparison, zebraIndex) {
 
     const sheet = ctx.sheet;
+    const width = hasComparison ? 4 : 2;
     const firstRow = ctx.row;
+    let nextZebraIndex = zebraIndex || 0;
 
     buckets.forEach(bucket => {
 
@@ -1320,29 +1384,30 @@ const ReportBuilder = {
 
       sheet.getRange(row, 1).setValue(bucket.label);
 
-      sheet.getRange(row, 2).setValue(
+      const countCell = sheet.getRange(row, 2);
+      countCell.setValue(
         bucket.percent2026 !== null && bucket.percent2026 !== undefined
           ? bucket.count2026 + " (" + bucket.percent2026 + "%)"
           : bucket.count2026 + " (н/д)"
       );
-      sheet.getRange(row, 2).setFontWeight("bold");
+      countCell.setFontWeight("bold").setHorizontalAlignment("right");
 
       if (hasComparison && bucket.delta !== null && bucket.delta !== undefined) {
         const deltaCell = sheet.getRange(row, 4);
         deltaCell.setValue(bucket.delta);
-        deltaCell.setFontWeight("bold");
+        deltaCell.setFontWeight("bold").setHorizontalAlignment("center");
         Formatter.setDeltaFontColor(deltaCell, bucket.delta, bucket.direction);
       }
+
+      // Заливка "зебры" — продолжение той же чередующейся заливки, что и
+      // у необязательной строки-подзаголовка перед карточкой (см.
+      // renderAggregatedAnswerBlock_), поэтому индекс приходит снаружи, а
+      // не начинается заново с 0 у каждой карточки.
+      Formatter.applyZebraStripe(sheet.getRange(row, 1, 1, width), nextZebraIndex++);
 
       ctx.row += 1;
 
     });
-
-    // KPI-карточка: светло-серая заливка трех (или двух, без сравнения)
-    // строк агрегата, без рамки — карточка отделяется от детализации
-    // пустой строкой (см. renderRiskQuestionBlock_), а не линией/рамкой.
-    const width = hasComparison ? 4 : 2;
-    sheet.getRange(firstRow, 1, buckets.length, width).setBackground("#f3f3f3");
 
     if (hasComparison) {
       const deltaRange = sheet.getRange(firstRow, 4, buckets.length, 1);
@@ -1444,7 +1509,7 @@ const ReportBuilder = {
 
     const valueCell = sheet.getRange(ctx.row, 1);
     valueCell.setValue(value2026);
-    Formatter.formatHighlightNumber(valueCell);
+    Formatter.applyReportHighlightCard(sheet, valueCell);
 
     const delta = hasComparison ? item.delta : null;
 
@@ -1452,6 +1517,7 @@ const ReportBuilder = {
 
       const deltaCell = sheet.getRange(ctx.row, 2);
       deltaCell.setValue(this.formatSignedDelta_(delta, ""));
+      deltaCell.setFontSize(11).setFontWeight("bold").setHorizontalAlignment("center");
       // Средний балл rating5 — рост всегда хорошо (шкала оценки), в
       // отличие от отдельных вариантов ответа в GOOD_DIRECTION_.
       Formatter.setDeltaFontColor(deltaCell, delta, "up");
@@ -1532,8 +1598,9 @@ const ReportBuilder = {
   renderReferenceAnswerList_(ctx, items, showDelta) {
 
     const sheet = ctx.sheet;
+    const width = showDelta ? 3 : 2;
 
-    items.forEach(item => {
+    items.forEach((item, index) => {
 
       const row = ctx.row;
       const percent2026 = item.percent2026 !== null && item.percent2026 !== undefined ? item.percent2026 : null;
@@ -1544,7 +1611,7 @@ const ReportBuilder = {
       countCell.setValue(
         percent2026 !== null ? item.count2026 + " (" + percent2026 + "%)" : item.count2026 + " (н/д)"
       );
-      countCell.setFontWeight("bold");
+      countCell.setFontWeight("bold").setHorizontalAlignment("right");
 
       if (showDelta) {
 
@@ -1552,7 +1619,7 @@ const ReportBuilder = {
         const deltaCell = sheet.getRange(row, 3);
 
         deltaCell.setValue(hasDelta ? item.delta : "н/д");
-        deltaCell.setFontWeight("bold");
+        deltaCell.setFontWeight("bold").setHorizontalAlignment("center");
 
         if (hasDelta) {
           Formatter.applyCompactDeltaIntegerFormat(deltaCell);
@@ -1560,6 +1627,8 @@ const ReportBuilder = {
         }
 
       }
+
+      Formatter.applyZebraStripe(sheet.getRange(row, 1, 1, width), index);
 
       ctx.row += 1;
 
@@ -1596,7 +1665,7 @@ const ReportBuilder = {
       width = 6;
     }
 
-    Formatter.formatTableHeader(sheet.getRange(headerRow, 1, 1, width));
+    Formatter.formatReportTableHeader(sheet.getRange(headerRow, 1, 1, width));
     ctx.row += 1;
 
     const firstDataRow = ctx.row;
@@ -1607,29 +1676,34 @@ const ReportBuilder = {
       const row = firstDataRow + index;
 
       sheet.getRange(row, 1).setValue(item.answer);
-      sheet.getRange(row, 2).setValue(item.count2026);
+
+      const countCell = sheet.getRange(row, 2);
+      countCell.setValue(item.count2026);
+      countCell.setHorizontalAlignment("right");
 
       if (hasPercent) {
-        sheet.getRange(row, 3).setValue(
+        const percentCell = sheet.getRange(row, 3);
+        percentCell.setValue(
           item.percent2026 !== null && item.percent2026 !== undefined ? item.percent2026 + "%" : "н/д"
         );
+        percentCell.setHorizontalAlignment("right");
       }
 
       if (hasComparison) {
-        sheet.getRange(row, 4).setValue(formatNullable(item.count2025));
+        sheet.getRange(row, 4).setValue(formatNullable(item.count2025)).setHorizontalAlignment("right");
         if (hasPercent) {
           sheet.getRange(row, 5).setValue(
             item.percent2025 !== null && item.percent2025 !== undefined ? item.percent2025 + "%" : "н/д"
-          );
+          ).setHorizontalAlignment("right");
         }
-        sheet.getRange(row, 6).setValue(formatNullable(item.delta));
+        sheet.getRange(row, 6).setValue(formatNullable(item.delta)).setHorizontalAlignment("center");
       }
+
+      Formatter.applyZebraStripe(sheet.getRange(row, 1, 1, width), index);
 
     });
 
     if (items.length > 0) {
-
-      Formatter.addTableBorder(sheet.getRange(headerRow, 1, items.length + 1, width));
 
       if (hasComparison) {
         const deltaRange = sheet.getRange(firstDataRow, 6, items.length, 1);
@@ -1664,7 +1738,7 @@ const ReportBuilder = {
    * formatLabel, но может отличаться (например, без эмодзи-легенды у
    * rating5 — чтобы не спорить за внимание с основным 2026-списком).
    */
-  renderCompactAnswerList_(ctx, items, hasComparison, formatLabel, formatSummaryLabel) {
+  renderCompactAnswerList_(ctx, items, hasComparison, formatLabel, formatSummaryLabel, resolveBarColor) {
 
     const summaryLabel = formatSummaryLabel || formatLabel;
     const sheet = ctx.sheet;
@@ -1684,25 +1758,27 @@ const ReportBuilder = {
       sheet.getRange(headerRow, 4).setValue("Δ (п.п.)");
     }
 
-    sheet.getRange(headerRow, 1, 1, width).setFontColor("#666666");
-    Formatter.addBottomBorder(sheet.getRange(headerRow, 1, 1, width), "#cccccc");
+    Formatter.formatReportTableHeader(sheet.getRange(headerRow, 1, 1, width));
     ctx.row += 1;
 
     const firstRow = ctx.row;
 
-    items.forEach(item => {
+    items.forEach((item, index) => {
 
       const row = ctx.row;
       const percent2026 = item.percent2026 !== null && item.percent2026 !== undefined ? item.percent2026 : null;
+      const rowRange = sheet.getRange(row, 1, 1, width);
 
       sheet.getRange(row, 1).setValue(formatLabel(item.answer));
 
-      sheet.getRange(row, 2).setValue(
+      const countCell = sheet.getRange(row, 2);
+      countCell.setValue(
         percent2026 !== null ? item.count2026 + " (" + percent2026 + "%)" : item.count2026 + " (н/д)"
       );
-      sheet.getRange(row, 2).setFontWeight("bold");
+      countCell.setFontWeight("bold").setHorizontalAlignment("right");
 
-      Formatter.setBlockProgressBar(sheet.getRange(row, 3), percent2026 !== null ? percent2026 : 0);
+      const barColor = resolveBarColor ? resolveBarColor(item.answer) : Formatter.ACCENT_TEAL;
+      Formatter.setBlockProgressBar(sheet.getRange(row, 3), percent2026 !== null ? percent2026 : 0, null, barColor);
 
       if (hasComparison) {
 
@@ -1710,7 +1786,7 @@ const ReportBuilder = {
         const hasDelta = item.delta !== null && item.delta !== undefined;
 
         deltaCell.setValue(hasDelta ? item.delta : "н/д");
-        deltaCell.setFontWeight("bold");
+        deltaCell.setFontWeight("bold").setHorizontalAlignment("center");
 
         if (hasDelta) {
           Formatter.setDeltaFontColor(deltaCell, item.delta, this.getGoodDirection_(item.answer));
@@ -1718,7 +1794,7 @@ const ReportBuilder = {
 
       }
 
-      Formatter.addBottomBorder(sheet.getRange(row, 1, 1, width), "#eeeeee");
+      Formatter.applyZebraStripe(rowRange, index);
 
       ctx.row += 1;
 
@@ -1767,7 +1843,7 @@ const ReportBuilder = {
    *
    * Ранг 2026 — это просто позиция в уже готовом items (items приходят
    * отсортированными по count2026 — тем же порядком, что и раньше строила
-   * таблицу Comparison.compareTopAnswerItems/Statistics.calculateTopAnswers,
+   * таблицу Comparison.compareTopAnswerItems/Statistics.selectTopAnswers,
    * см. renderQuestionBlock_). Ранг 2025 считается тем же способом — той
    * же стабильной сортировкой JS Array.sort по count2025 — поэтому при
    * равенстве count2025 у нескольких вариантов порядок между ними
@@ -1789,10 +1865,21 @@ const ReportBuilder = {
 
     if (hasComparison) {
       const headerRow = ctx.row;
-      sheet.getRange(headerRow, 3).setValue("Δ (п.п.)");
-      sheet.getRange(headerRow, 4).setValue("Позиция");
-      sheet.getRange(headerRow, 3, 1, 2).setFontColor("#666666");
-      Formatter.addBottomBorder(sheet.getRange(headerRow, 1, 1, 4), "#cccccc");
+      const deltaHeaderCell = sheet.getRange(headerRow, 3);
+      const positionHeaderCell = sheet.getRange(headerRow, 4);
+      deltaHeaderCell.setValue("Δ (п.п.)");
+      positionHeaderCell.setValue("Позиция");
+      // Легкий серый подзаголовок колонок, а не бирюзовая
+      // заливка полноценного заголовка мини-таблицы (см.
+      // Formatter.formatReportTableHeader) — по макету у рейтингового
+      // списка нет отдельной строки-заголовка "Ответ"/"2026" (эти
+      // значения и так очевидны из самого рейтинга), колонки Δ/Позиция
+      // подписаны мелким приглушенным текстом по центру.
+      sheet.getRange(headerRow, 3, 1, 2)
+        .setFontFamily(Formatter.REPORT_FONT)
+        .setFontSize(9)
+        .setFontColor(Formatter.MUTED_TEXT_COLOR)
+        .setHorizontalAlignment("center");
       ctx.row += 1;
     }
 
@@ -1810,8 +1897,9 @@ const ReportBuilder = {
       const rank2026 = index + 1;
 
       const titleRow = ctx.row;
-      sheet.getRange(titleRow, 1).setValue(this.formatRankLabel_(rank2026) + " " + item.answer);
-      Formatter.formatLabel(sheet.getRange(titleRow, 1));
+      const titleRange = sheet.getRange(titleRow, 1);
+      titleRange.setValue(this.formatRankLabel_(rank2026) + " " + item.answer);
+      Formatter.formatLabel(sheet, titleRange);
       ctx.row += 1;
 
       const metricsRow = ctx.row;
@@ -1820,12 +1908,15 @@ const ReportBuilder = {
       // Небольшой отступ слева (не форматирование ячейки — Sheets Range
       // не дает API отступа абзаца) — визуально связывает строку
       // показателей со строкой заголовка над ней в один элемент рейтинга.
-      sheet.getRange(metricsRow, 1).setValue(
+      const metricsLabelCell = sheet.getRange(metricsRow, 1);
+      metricsLabelCell.setValue(
         "    " + (percent2026 !== null ? item.count2026 + " (" + percent2026 + "%)" : item.count2026 + " (н/д)")
       );
-      sheet.getRange(metricsRow, 1).setFontWeight("bold");
+      metricsLabelCell.setFontWeight("bold");
 
-      Formatter.setBlockProgressBar(sheet.getRange(metricsRow, 2), percent2026 !== null ? percent2026 : 0);
+      Formatter.setBlockProgressBar(
+        sheet.getRange(metricsRow, 2), percent2026 !== null ? percent2026 : 0, null, Formatter.ACCENT_TEAL
+      );
 
       if (hasComparison) {
 
@@ -1833,7 +1924,7 @@ const ReportBuilder = {
         const hasDelta = item.delta !== null && item.delta !== undefined;
 
         deltaCell.setValue(hasDelta ? item.delta : "н/д");
-        deltaCell.setFontWeight("bold");
+        deltaCell.setFontWeight("bold").setHorizontalAlignment("center");
 
         if (hasDelta) {
           Formatter.applyCompactDeltaNumberFormat(deltaCell);
@@ -1848,7 +1939,7 @@ const ReportBuilder = {
           const positionCell = sheet.getRange(metricsRow, 4);
 
           positionCell.setValue(this.formatRankChange_(positionDelta));
-          positionCell.setFontWeight("bold");
+          positionCell.setFontWeight("bold").setHorizontalAlignment("center");
           positionCell.setFontColor(
             positionDelta > 0
               ? Formatter.DELTA_GOOD_COLOR
@@ -1858,6 +1949,12 @@ const ReportBuilder = {
         }
 
       }
+
+      // Только строка показателей чередует заливку (см. макет: заголовок
+      // пункта рейтинга всегда без заливки, "зебра" — только на второй
+      // строке каждого пункта) — index здесь совпадает с рангом-1, т.е.
+      // одна и та же чередующаяся заливка для всех пунктов рейтинга.
+      Formatter.applyZebraStripe(sheet.getRange(metricsRow, 1, 1, hasComparison ? 4 : 2), index);
 
       ctx.row += 1; // без пустой строки — каждый пункт рейтинга занимает ровно 2 строки
 
@@ -1933,29 +2030,26 @@ const ReportBuilder = {
     const rawHeaders = reportData.headers;
     const rawRows = reportData.filteredRows;
 
-    sheet.getRange(ctx.row, 1).setValue(
-      "Сырые данные (" + reportData.employees + " " +
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue(
+      "🗄️ Сырые данные (" + reportData.employees + " " +
       this.pluralizeRu_(reportData.employees, ["ответ", "ответа", "ответов"]) + ")"
     );
-    Formatter.formatSectionTitle(sheet.getRange(ctx.row, 1));
+    Formatter.formatSectionTitle(sheet, titleRange);
     Formatter.formatSectionDivider(sheet.getRange(ctx.row, 1, 1, Math.max(rawHeaders.length, 1)));
     ctx.row += 1;
 
     const rawHeaderRow = ctx.row;
 
     sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length).setValues([rawHeaders]);
-    Formatter.formatTableHeader(
-      sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length)
+    Formatter.formatRawDataHeader(
+      sheet, sheet.getRange(rawHeaderRow, 1, 1, rawHeaders.length)
     );
     ctx.row += 1;
 
     if (rawRows.length > 0) {
 
       sheet.getRange(rawHeaderRow + 1, 1, rawRows.length, rawHeaders.length).setValues(rawRows);
-
-      Formatter.addTableBorder(
-        sheet.getRange(rawHeaderRow, 1, rawRows.length + 1, rawHeaders.length)
-      );
 
       ctx.row += rawRows.length;
 
@@ -2029,10 +2123,7 @@ const ReportBuilder = {
    */
   getReportKey_(reportData) {
 
-    const normalizedFilters = (reportData.filters || [])
-      .filter(filter => this.hasFilterValue(filter))
-      .map(filter => this.normalizeFilterForKey_(filter))
-      .sort((a, b) => a.question.localeCompare(b.question));
+    const normalizedFilters = this.getNormalizedFilters(reportData.filters);
 
     const payload = JSON.stringify({
       source: reportData.source,
@@ -2043,6 +2134,29 @@ const ReportBuilder = {
     return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, payload, Utilities.Charset.UTF_8)
       .map(byte => ((byte + 256) % 256).toString(16).padStart(2, "0"))
       .join("");
+
+  },
+
+  /**
+   * Нормализованный набор фильтров: только фильтры с заданным значением,
+   * приведенные к стабильному виду и отсортированные по названию вопроса.
+   *
+   * Описывает сами ФИЛЬТРЫ выборки и ничего кроме них: результат не
+   * зависит ни от порядка, в котором пользователь их добавлял, ни от
+   * источника данных, ни от того, включено ли сравнение. Поэтому
+   * используется в двух местах с разным смыслом: здесь — как часть
+   * сигнатуры конкретного отчета (getReportKey_ добавляет к нему источник
+   * и флаг сравнения), а в сводной аналитике — как часть ключа строки
+   * (см. Summary.buildSampleKey_, который добавляет к нему источник, но
+   * не флаг сравнения — тот влияет только на отображение отчета, а не на
+   * то, какая это выборка).
+   */
+  getNormalizedFilters(filters) {
+
+    return (filters || [])
+      .filter(filter => this.hasFilterValue(filter))
+      .map(filter => this.normalizeFilterForKey_(filter))
+      .sort((a, b) => a.question.localeCompare(b.question));
 
   },
 
