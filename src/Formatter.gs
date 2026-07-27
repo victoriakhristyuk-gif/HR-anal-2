@@ -145,15 +145,6 @@ const Formatter = {
   },
 
   /**
-   * Крупное выделенное число (например, итоговый eNPS) — простой
-   * вариант без карточки (фон/рамка), см. applyReportHighlightCard для
-   * нового вида по макету.
-   */
-  formatHighlightNumber(range) {
-    range.setFontSize(18).setFontWeight("bold");
-  },
-
-  /**
    * KPI-карточка крупного выделенного числа (eNPS, средняя оценка) —
    * бирюзовая рамка, бледно-бирюзовый фон, крупный жирный текст по
    * центру (см. C12/C358 макета).
@@ -180,13 +171,6 @@ const Formatter = {
    */
   applyZebraStripe(range, rowIndex) {
     range.setBackground(rowIndex % 2 === 1 ? this.STRIPE_BG : null);
-  },
-
-  /**
-   * Внешняя и внутренняя рамка таблицы
-   */
-  addTableBorder(range) {
-    range.setBorder(true, true, true, true, true, true);
   },
 
   /**
@@ -246,32 +230,6 @@ const Formatter = {
   },
 
   /**
-   * Цветовая шкала на диапазоне значений (например, средние оценки
-   * 1-5 или проценты 0-100) — добавляется к уже существующим правилам
-   * условного форматирования листа, не заменяя их.
-   *
-   * У ConditionalFormatRuleBuilder нет простого setGradientMidpoint(color)
-   * (в отличие от Min/Max у него нет однозначного значения по умолчанию) —
-   * средняя точка обязательно задается через setGradientMidpointWithValue
-   * с явным типом интерполяции; берем 50% между минимумом и максимумом
-   * диапазона.
-   */
-  applyColorScale(sheet, range, minColor, midColor, maxColor) {
-
-    const rule = SpreadsheetApp.newConditionalFormatRule()
-      .setGradientMinpoint(minColor)
-      .setGradientMidpointWithValue(midColor, SpreadsheetApp.InterpolationType.PERCENT, "50")
-      .setGradientMaxpoint(maxColor)
-      .setRanges([range])
-      .build();
-
-    const rules = sheet.getConditionalFormatRules();
-    rules.push(rule);
-    sheet.setConditionalFormatRules(rules);
-
-  },
-
-  /**
    * Подсветка ячеек динамики (Δ): зеленый фон при заметном росте,
    * красный при заметном снижении, без подсветки — если изменение
    * меньше порога. Порог передается вызывающей стороной (например,
@@ -317,15 +275,6 @@ const Formatter = {
       '"▲ +"0.0"' + unit + '";"▼ "-0.0"' + unit + '";"– "0.0"' + unit + '"'
     );
 
-  },
-
-  /**
-   * Компактный горизонтальный мини-бар в ячейке (вместо отдельного
-   * графика на каждую строку таблицы) — например, для наглядности
-   * средней оценки на шкале 0..max в общем обзоре средних.
-   */
-  setBarFormula(cell, value, max) {
-    cell.setFormula('=SPARKLINE(' + value + ',{"charttype","bar";"max",' + max + '})');
   },
 
   /**
@@ -510,15 +459,5 @@ const Formatter = {
   applyCompactDeltaTwoDecimalFormat(range) {
     range.setNumberFormat(this.buildCompactDeltaFormat_("0.00"));
   },
-
-  /**
-   * Тонкая нижняя граница диапазона (например, разделитель строк в
-   * компактном списке или под его заголовком) — в отличие от
-   * addTableBorder/formatSectionDivider, не затрагивает остальные
-   * стороны и не претендует на вид "таблицы".
-   */
-  addBottomBorder(range, color) {
-    range.setBorder(false, false, true, false, false, false, color || "#e0e0e0", SpreadsheetApp.BorderStyle.SOLID);
-  }
 
 };
