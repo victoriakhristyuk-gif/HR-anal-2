@@ -400,6 +400,27 @@ const Formatter = {
 
   },
 
+  /**
+   * Ячейка с целиком заданным текстом, где один фрагмент произвольной
+   * позиции (не обязательно префикс, в отличие от setColoredPrefixText)
+   * выделен своим цветом — например, слово "выше"/"ниже" посреди строки
+   * "eNPS: 63 (выше на 7 п.п.) · ...". Без покраски вовсе, если start
+   * равен null (фрагмента для выделения нет, например "eNPS на уровне
+   * компании" — красить нечего).
+   */
+  setColoredSubstring(cell, text, start, length, color) {
+
+    const builder = SpreadsheetApp.newRichTextValue().setText(text);
+
+    if (start !== null && length > 0) {
+      builder.setTextStyle(start, start + length,
+        SpreadsheetApp.newTextStyle().setForegroundColor(color).build());
+    }
+
+    cell.setRichTextValue(builder.build());
+
+  },
+
   DELTA_GOOD_COLOR: "#1F8A5F",
   DELTA_BAD_COLOR: "#D1483A",
   DELTA_NEUTRAL_COLOR: "#808A94",

@@ -6,11 +6,6 @@
 
 const ReportBuilder = {
 
-  // Порог нерепрезентативности выборки (UX-правило проекта, не
-  // статистический расчет). При сравнении проверяется меньшая из
-  // выборок 2026/2025 — именно она ограничивает надежность сравнения.
-  SMALL_SAMPLE_THRESHOLD: 5,
-
   // UX-пороги для подсветки динамики (эвристика для визуального
   // выделения "заметных" изменений, НЕ статистическая значимость).
   // Значения относятся к предметной области отчета, поэтому живут
@@ -18,6 +13,23 @@ const ReportBuilder = {
   // по переданному порогу, не зная, откуда порог взялся.
   DELTA_THRESHOLD_RATING: 0.3,   // средние оценки (шкала 1-5), баллы
   DELTA_THRESHOLD_PERCENT: 5,    // eNPS/распределения/Top-5, п.п.
+
+  // Минимальный охват метрики (100% - % "не пользовался"), ниже которого
+  // средняя оценка не попадает в топ/дно Short Summary — иначе метрику
+  // с горсткой ответивших ("Курсы английского", "Мерч за достижения")
+  // может вынести в топ/дно случайным средним по 2-3 респондентам.
+  MIN_COVERAGE_PERCENT_: 45,
+
+  // Порог "драматичности" изменения между периодами для долевых метрик
+  // (проценты вариантов ответа, категории eNPS), в процентных пунктах.
+  // Отдельная константа, а не DELTA_THRESHOLD_PERCENT (5) — тот считает
+  // "заметность" для подсветки в детальном отчете (тепловая карта и
+  // т.п.), а этот — специально для детектора резких сдвигов между
+  // периодами, с другим назначением и намеренно другим числом.
+  // Порог для средних оценок не заводится отдельно — используется
+  // существующий DELTA_THRESHOLD_RATING (0.3), тот же порог, что и для
+  // остальных UX-порогов "заметности" изменения оценки.
+  DRAMATIC_CHANGE_THRESHOLD_PERCENT_: 3,
 
   // Ключ developer metadata, которым лист-отчет помечается сигнатурой
   // своих параметров построения (источник + сравнение + фильтры).
@@ -68,11 +80,10 @@ const ReportBuilder = {
 
     this.renderHeader_(ctx);
     this.renderPassport_(ctx, reportData);
-    this.renderSampleWarning_(ctx, reportData);
 
-    // Замораживаем строки заголовка/паспорта/предупреждения (без
-    // хвостовой пустой строки-разделителя) — они остаются на виду при
-    // прокрутке остальной, гораздо более длинной, части отчета.
+    // Замораживаем строки заголовка/паспорта (без хвостовой пустой
+    // строки-разделителя) — они остаются на виду при прокрутке
+    // остальной, гораздо более длинной, части отчета.
     const frozenRows = ctx.row - 1;
 
     // Порядок разделов отчета (см. также ReportSections.gs):
@@ -160,35 +171,6 @@ const ReportBuilder = {
   },
 
   /**
-   * Предупреждение о нерепрезентативной выборке (n < порога). Данные
-   * при этом не скрываются — баннер только привлекает внимание.
-   */
-  renderSampleWarning_(ctx, reportData) {
-
-    const sheet = ctx.sheet;
-
-    const minSample = reportData.comparison
-      ? Math.min(reportData.employees, reportData.comparison.employees2025)
-      : reportData.employees;
-
-    if (minSample >= this.SMALL_SAMPLE_THRESHOLD) {
-      return;
-    }
-
-    const range = sheet.getRange(ctx.row, 1, 1, 3);
-
-    range.setValue(
-      "⚠ Выборка нерепрезентативна (n=" + minSample + " < " + this.SMALL_SAMPLE_THRESHOLD +
-      ") — данные приведены, но интерпретируйте их с осторожностью"
-    );
-    Formatter.formatWarningBanner(range);
-
-    ctx.row += 1;
-    ctx.row += 1; // пустая строка-разделитель
-
-  },
-
-  /**
    * Executive Summary — компактное текстовое представление уже
    * посчитанных данных (eNPS, средние оценки, их динамика), без
    * новых показателей и без новой аналитики. Состав зафиксирован
@@ -205,18 +187,54 @@ const ReportBuilder = {
 
     let lineIndex = 0;
 
-    const enpsLineCell = sheet.getRange(ctx.row, 1);
-    enpsLineCell.setValue(this.buildEnpsSummaryLine_(reportData));
-    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
-    ctx.row += 1;
+    // 1. eNPS: значение + дельта к предыдущему периоду + (для любого
+    // среза, кроме "вся компания") сравнение с eNPS всей компании.
+    this.renderEnpsLine_(ctx, reportData, lineIndex++);
 
-    const sortedDesc = reportData.averageRatings.slice().sort((a, b) => b.average - a.average);
-    const sortedAsc = reportData.averageRatings.slice().sort((a, b) => a.average - b.average);
+    // 2. Интерпретация изменения eNPS (Модуль 3) — пропускается целиком,
+    // если сравнивать не с чем или изменение ниже порога значимости.
+    const enpsShift = this.interpretEnpsShift_(reportData);
+
+    if (enpsShift) {
+      const enpsShiftCell = sheet.getRange(ctx.row, 1);
+      enpsShiftCell.setValue(enpsShift);
+      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      ctx.row += 1;
+    }
+
+    // 3. Топ-тем из открытых комментариев (Модуль 4) — пропускается,
+    // если ни одна тема не набрала total > 1.
+    const comments = this.buildCommentsForThemeDetection_(reportData);
+    const themes = this.detectCommentThemes_(comments);
+
+    if (themes.length > 0) {
+      const themesLineCell = sheet.getRange(ctx.row, 1);
+      themesLineCell.setValue("Темы в комментариях: " + this.formatThemesList_(themes.slice(0, 3)));
+      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      ctx.row += 1;
+    }
+
+    // 4. Драматичные изменения по всем блокам анкеты (Модуль 2) —
+    // пропускается, если список пуст (нет пары за прошлый год, либо
+    // изменений выше порога не нашлось).
+    const dramaticChangesInput = this.buildDramaticChangesInput_(reportData);
+    const dramaticChanges = this.selectDramaticChanges_(dramaticChangesInput);
+
+    if (dramaticChanges.length > 0) {
+      const dramaticChangesCell = sheet.getRange(ctx.row, 1);
+      dramaticChangesCell.setValue("Заметные изменения: " + this.formatDramaticChangesList_(dramaticChanges.slice(0, 3)));
+      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      ctx.row += 1;
+    }
+
+    // 5. Топ-3/дно-3 метрик с фильтром по покрытию (Модуль 1).
+    const metrics = this.buildRatingMetricsForSummary_(reportData);
+    const extremes = this.selectTopBottomRatings_(metrics, 3);
 
     const highLineCell = sheet.getRange(ctx.row, 1);
     Formatter.setColoredPrefixText(
       highLineCell, "Самые высокие показатели: ",
-      this.formatRatingList_(sortedDesc.slice(0, 3)), Formatter.DELTA_GOOD_COLOR
+      this.formatRatingList_(extremes.top), Formatter.DELTA_GOOD_COLOR
     );
     Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
     ctx.row += 1;
@@ -224,17 +242,46 @@ const ReportBuilder = {
     const lowLineCell = sheet.getRange(ctx.row, 1);
     Formatter.setColoredPrefixText(
       lowLineCell, "Самые низкие показатели: ",
-      this.formatRatingList_(sortedAsc.slice(0, 3)), Formatter.DELTA_BAD_COLOR
+      this.formatRatingList_(extremes.bottom), Formatter.DELTA_BAD_COLOR
     );
     Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
     ctx.row += 1;
 
-    if (reportData.comparison) {
-      const dynamicsLineCell = sheet.getRange(ctx.row, 1);
-      dynamicsLineCell.setValue(this.buildDynamicsSummaryLine_(reportData));
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
-      ctx.row += 1;
-    }
+  },
+
+  /**
+   * "Тема (total, негатив N)" для списка тем из detectCommentThemes_ —
+   * количество негатива показывается только если он есть (negative===0
+   * не добавляет тексту сигнала, только шум).
+   */
+  formatThemesList_(themes) {
+
+    return themes
+      .map(t => t.theme + " (" + t.total + (t.negative > 0 ? ", негатив " + t.negative : "") + ")")
+      .join("   ");
+
+  },
+
+  /**
+   * "questionTitle Δ" для rating-изменений, "questionTitle — answerLabel Δ"
+   * для percent-изменений из selectDramaticChanges_ — тот же формат
+   * дельты (стрелка+знак), что и у остальных строк Executive Summary.
+   */
+  formatDramaticChangesList_(changes) {
+
+    return changes
+      .map(change => {
+
+        const label = change.kind === "rating"
+          ? change.questionTitle
+          : change.questionTitle + " — " + change.answerLabel;
+
+        const suffix = change.kind === "rating" ? "" : " п.п.";
+
+        return label + " " + this.formatSignedDelta_(change.delta, suffix);
+
+      })
+      .join("   ");
 
   },
 
@@ -268,27 +315,176 @@ const ReportBuilder = {
 
   },
 
+  // Порог отставания eNPS среза от eNPS компании (в п.п.), при котором
+  // строка получает дополнительный визуальный акцент (см.
+  // renderEnpsLine_) — срез отстает настолько сильно, что это нельзя
+  // просто прочитать наравне с остальными строками Short Summary.
+  // Работает только в одну сторону: срез лучше компании, даже сильно
+  // лучше, дополнительного акцента не получает (см. задачу) — только
+  // обычная зеленая покраска слова "выше".
+  ENPS_COMPANY_GAP_ALERT_THRESHOLD_: 20,
+
   /**
-   * Строка "Динамика" для Executive Summary: eNPS + самые заметные
-   * изменения средних оценок (выше UX-порога DELTA_THRESHOLD_RATING).
-   * Если ни один вопрос порог не превышает — явный текст об этом,
-   * а не подобранное "на всякий случай" значение.
+   * Строка 1 Short Summary для СРЕЗА (не "вся компания" — для нее
+   * используется buildEnpsSummaryLine_ без изменений, сравнивать не с
+   * чем). Помимо значения и YoY-динамики (та же логика, что и раньше,
+   * см. buildEnpsSummaryLine_), строка получает сравнение eNPS среза с
+   * eNPS всей компании за тот же период — отдельный, независимый от
+   * YoY элемент строки.
+   *
+   * Пишет ячейку целиком сама (а не возвращает строку, как
+   * buildEnpsSummaryLine_) — нужен RichText для покраски одного слова
+   * ("выше"/"ниже") и, при сильном отставании, полноценное условное
+   * форматирование строки, а не просто текст.
    */
-  buildDynamicsSummaryLine_(reportData) {
+  renderEnpsLine_(ctx, reportData, lineIndex) {
 
-    const movers = reportData.comparison.averageRatings
-      .filter(item => item.delta !== null && Math.abs(item.delta) >= this.DELTA_THRESHOLD_RATING)
-      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+    const sheet = ctx.sheet;
+    const rowRange = sheet.getRange(ctx.row, 1, 1, 6);
+    const cell = sheet.getRange(ctx.row, 1);
 
-    if (movers.length === 0) {
-      return "Динамика: существенных изменений в средних оценках не выявлено";
+    const isWholeCompany = reportData.filters.filter(filter => this.hasFilterValue(filter)).length === 0;
+
+    if (isWholeCompany) {
+      cell.setValue(this.buildEnpsSummaryLine_(reportData));
+      Formatter.applyZebraStripe(rowRange, lineIndex);
+      ctx.row += 1;
+      return;
     }
 
-    const top = movers.slice(0, 3)
-      .map(item => item.question + " " + this.formatSignedDelta_(item.delta, ""))
-      .join("   ");
+    const sliceEnps = reportData.enps.enps;
+    const companyEnps = this.getCompanyEnpsForPeriod_(reportData);
+    const companyClause = this.buildEnpsCompanyComparisonClause_(sliceEnps, companyEnps);
 
-    return "Динамика: " + top;
+    // YoY-часть — независимый от сравнения с компанией элемент строки:
+    // присутствует, только когда применимо (сравнение с 2025 включено
+    // для этого построения отчета), той же семантикой, что и раньше.
+    const yoyText = reportData.comparison ? this.buildSliceEnpsYoyText_(reportData) : null;
+
+    let text = "eNPS: " + sliceEnps;
+    let wordStart = null;
+    let wordLength = 0;
+    let isDramaticallyLower = false;
+
+    if (companyClause) {
+
+      const beforeWord = text + " (";
+      text = beforeWord + companyClause.text + ")";
+
+      if (companyClause.wordStart !== null) {
+        wordStart = beforeWord.length + companyClause.wordStart;
+        wordLength = companyClause.wordLength;
+      }
+
+      isDramaticallyLower = companyClause.isDramaticallyLower;
+
+    }
+
+    if (yoyText !== null) {
+      text += " · " + yoyText;
+    }
+
+    Formatter.setColoredSubstring(cell, text, wordStart, wordLength,
+      wordStart !== null ? companyClause.color : null);
+
+    Formatter.applyZebraStripe(rowRange, lineIndex);
+
+    // Доп. акцент — только когда срез хуже компании на пороговую
+    // величину и более; срез лучше компании (даже сильно) акцента не
+    // получает (см. задачу).
+    if (isDramaticallyLower) {
+      Formatter.formatWarningBanner(rowRange);
+    }
+
+    ctx.row += 1;
+
+  },
+
+  /**
+   * eNPS всей компании за тот же период (reportData.source), БЕЗ каких-
+   * либо фильтров — базовая линия для сравнения среза с компанией (см.
+   * renderEnpsLine_). null, если во всей компании нет ни одного
+   * валидного ответа на eNPS (на реальных данных недостижимо, но чтобы
+   * не сравнивать с фиктичным 0 — тот же прием, что и everywhere в
+   * этом файле).
+   *
+   * loadSurveyData кэширует лист в пределах одного запуска скрипта
+   * (см. DataLoader.gs) — ReportService.buildReport уже читает тот же
+   * лист в начале построения отчета, поэтому здесь это не второе
+   * чтение листа, а попадание в кэш.
+   *
+   * @param {Object} reportData
+   * @returns {number|null}
+   */
+  getCompanyEnpsForPeriod_(reportData) {
+
+    const survey = loadSurveyData(reportData.source, true);
+    const companyEnps = Statistics.calculateENPS(survey.data, survey.headers);
+
+    return companyEnps.total > 0 ? companyEnps.enps : null;
+
+  },
+
+  /**
+   * "выше на N п.п." / "ниже на N п.п." / "на уровне компании" — часть
+   * строки eNPS про сравнение среза со всей компанией. null, если
+   * companyEnps недоступен — сравнивать не с чем, вызывающая сторона
+   * этот элемент строки просто не показывает.
+   *
+   * wordStart/wordLength — позиция слова "выше"/"ниже" ВНУТРИ этого
+   * текста (для покраски через Formatter.setColoredSubstring в
+   * renderEnpsLine_, где этот текст уже вставлен в более длинную
+   * строку) — null у "на уровне компании", красить нечего.
+   *
+   * @param {number} sliceEnps
+   * @param {number|null} companyEnps
+   * @returns {{text: string, wordStart: number|null, wordLength: number, color: string|null, isDramaticallyLower: boolean}|null}
+   */
+  buildEnpsCompanyComparisonClause_(sliceEnps, companyEnps) {
+
+    if (companyEnps === null) {
+      return null;
+    }
+
+    const delta = sliceEnps - companyEnps;
+
+    if (delta === 0) {
+      return { text: "на уровне компании", wordStart: null, wordLength: 0, color: null, isDramaticallyLower: false };
+    }
+
+    const word = delta > 0 ? "выше" : "ниже";
+    const color = delta > 0 ? Formatter.DELTA_GOOD_COLOR : Formatter.DELTA_BAD_COLOR;
+
+    return {
+      text: word + " на " + Math.abs(delta) + " п.п.",
+      wordStart: 0,
+      wordLength: word.length,
+      color: color,
+      // Только "хуже компании" может дать доп. акцент — срез лучше
+      // компании (delta > 0) никогда сюда не попадает.
+      isDramaticallyLower: delta <= -this.ENPS_COMPANY_GAP_ALERT_THRESHOLD_
+    };
+
+  },
+
+  /**
+   * YoY-часть строки eNPS для среза (не "вся компания") — та же логика,
+   * что и в buildEnpsSummaryLine_, но с формулировками для комбинированной
+   * строки (см. renderEnpsLine_): "нет данных 2025 для сравнения по
+   * срезу" (уточнение "по срезу" — есть данные 2025, но не для этого
+   * среза) вместо просто "нет данных 2025 для сравнения", и "к 2025 (N)"
+   * вместо "к 2025: N" — чтобы не путать с скобками сравнения с
+   * компанией. Вызывается, только когда reportData.comparison есть.
+   */
+  buildSliceEnpsYoyText_(reportData) {
+
+    const comparisonEnps = reportData.comparison.enps;
+
+    if (comparisonEnps.delta === null || comparisonEnps.value2025 === null) {
+      return "нет данных 2025 для сравнения по срезу";
+    }
+
+    return this.formatSignedDelta_(comparisonEnps.delta, " п.п.") + " к 2025 (" + comparisonEnps.value2025 + ")";
 
   },
 
@@ -604,6 +800,420 @@ const ReportBuilder = {
     });
 
     return coverage;
+
+  },
+
+  /**
+   * Метрики для Short Summary: reportData.averageRatings, дополненные
+   * процентом "не пользовался" из buildAverageCoverageInfo_, слитые по
+   * названию вопроса. Вопрос без записи в coverage (нет варианта "не
+   * пользовался" в принципе, либо доля округлилась до 0%) считается
+   * охваченным на 100% — notUsedPercent 0.
+   *
+   * Отдельная функция, а не инлайн в renderExecutiveSummary_, потому что
+   * selectTopBottomRatings_ работает с произвольным списком метрик —
+   * это сборка такого списка конкретно из reportData текущего отчета.
+   *
+   * @param {Object} reportData
+   * @returns {Array<{question: string, average: number, notUsedPercent: number}>}
+   */
+  buildRatingMetricsForSummary_(reportData) {
+
+    const coverage = this.buildAverageCoverageInfo_(reportData);
+
+    return reportData.averageRatings.map(item => ({
+      question: item.question,
+      average: item.average,
+      notUsedPercent: coverage[item.question] ? coverage[item.question].percent : 0
+    }));
+
+  },
+
+  /**
+   * Топ-limit и дно-limit метрик по среднему баллу, с исключением
+   * метрик с низким охватом (100% - notUsedPercent < MIN_COVERAGE_PERCENT_) —
+   * такую метрику посчитали единицы, и ее среднее ненадежно как для
+   * похвалы, так и для тревоги.
+   *
+   * Не читает reportData/лист напрямую: принимает уже собранный список
+   * метрик, поэтому подходит для любого среза (общий отчет, департамент,
+   * сравнение и т.д.), а не только для reportData.averageRatings как есть.
+   *
+   * Топ и дно не пересекаются даже при небольшом числе метрик, прошедших
+   * фильтр охвата: сначала берется top-limit по убыванию, затем дно —
+   * из оставшихся (без повторной сортировки заново), а не из полного
+   * списка. Сортировка стабильная (Array.prototype.sort в V8/Apps Script
+   * стабилен) — при равном среднем балле порядок как во входном массиве.
+   *
+   * Если после фильтра метрик меньше limit (или меньше 2*limit) — топ
+   * и/или дно возвращаются укороченными, без дозаполнения и без ошибки.
+   *
+   * @param {Array<{question: string, average: number, notUsedPercent?: number}>} metrics
+   * @param {number} [limit=3]
+   * @returns {{top: Array, bottom: Array}}
+   */
+  selectTopBottomRatings_(metrics, limit) {
+
+    const n = limit || 3;
+
+    const eligible = metrics.filter(metric =>
+      (100 - (metric.notUsedPercent || 0)) >= this.MIN_COVERAGE_PERCENT_
+    );
+
+    const sortedDesc = eligible.slice().sort((a, b) => b.average - a.average);
+
+    const top = sortedDesc.slice(0, n);
+    const remaining = sortedDesc.slice(n);
+
+    const bottom = remaining.slice().sort((a, b) => a.average - b.average).slice(0, n);
+
+    return { top: top, bottom: bottom };
+
+  },
+
+  // Вопросы, которые не участвуют в детекторе драматичных изменений, хотя
+  // и попадают в reportData.comparison.distributions — это состав выборки
+  // (демография), а не мнение respondentов. Сдвиг в "Отделе" на 3 п.п.
+  // почти всегда значит "кто-то перешел в другой отдел", а не сигнал для
+  // Short Summary. Список закрытый и по названию, а не по какому-то
+  // общему признаку в Questions.gs — эти четыре вопроса единственные в
+  // своем роде (демографический профиль), и общего маркера для них нет.
+  DRAMATIC_CHANGE_EXCLUDED_QUESTIONS_: ["Формат работы", "Город", "Отдел", "Стаж"],
+
+  // Подписи категорий eNPS для detector-записей — то же деление, что и в
+  // Statistics.calculateENPS/Comparison.compareEnpsCategories_.
+  ENPS_CATEGORY_LABELS_: {
+    promoters: "Промоутеры",
+    neutrals: "Нейтралы",
+    detractors: "Критики"
+  },
+
+  // Варианты ответа, которые означают "не знаю"/"не пользовался"/отказ
+  // отвечать по существу, а не содержательный ответ — при пересчете долей
+  // для детектора драматичных изменений исключаются и из числителя, и из
+  // знаменателя (см. recomputeDistributionDeltasExcludingNeutral_), чтобы
+  // рост доли "затрудняюсь ответить" не размывал проценты по остальным,
+  // содержательным вариантам. Названия, а не какой-то общий признак в
+  // Questions.gs — как и у DRAMATIC_CHANGE_EXCLUDED_QUESTIONS_, общего
+  // маркера для "неответа" в каталоге нет. Список закрытый, но
+  // применяется универсально к любому вопросу, где такой вариант
+  // встретится, а не только к "Выгоранию" (единственному, где он есть
+  // среди текущих данных).
+  NEUTRAL_DISTRIBUTION_ANSWERS_: ["затрудняюсь ответить", "не знаю", "не пользовался"],
+
+  /**
+   * Является ли вариант ответа "неответом" по существу (см.
+   * NEUTRAL_DISTRIBUTION_ANSWERS_).
+   */
+  isNeutralDistributionAnswer_(answer) {
+    return this.NEUTRAL_DISTRIBUTION_ANSWERS_.indexOf(Statistics.normalize_(answer)) !== -1;
+  },
+
+  /**
+   * Проценты и дельта варианта ответа заново, БЕЗ учета "неответа"
+   * (NEUTRAL_DISTRIBUTION_ANSWERS_) — ни в числителе, ни в знаменателе.
+   * comparison.distributions уже содержит percent2026/percent2025/delta
+   * (Comparison.compareDistributionItems), но они посчитаны от ВСЕХ
+   * ответивших, включая "затрудняюсь ответить"/"не пользовался" — здесь
+   * знаменатель пересчитывается только по содержательным вариантам.
+   *
+   * Сам вариант-неответ в результат не попадает вовсе — это только
+   * исправление метода расчета остальных долей, а не новая метрика для
+   * показа (см. задачу).
+   *
+   * Год без валидных (после исключения неответа) ответов — percent null,
+   * а не 0, той же семантикой, что и everywhere в этом файле: если все
+   * ответившие на вопрос выбрали "затрудняюсь ответить", знаменатель
+   * обнуляется, и percent/delta по остальным вариантам не считаются,
+   * а не делятся на ноль.
+   *
+   * @param {Array<{answer: string, count2026: number, count2025: number}>} items
+   * @returns {Array<{answer: string, delta: number|null}>}
+   */
+  recomputeDistributionDeltasExcludingNeutral_(items) {
+
+    const meaningfulItems = items.filter(item => !this.isNeutralDistributionAnswer_(item.answer));
+
+    const total2026 = meaningfulItems.reduce((sum, item) => sum + item.count2026, 0);
+    const total2025 = meaningfulItems.reduce((sum, item) => sum + item.count2025, 0);
+
+    return meaningfulItems.map(item => {
+
+      const percent2026 = total2026 > 0 ? Math.round(item.count2026 / total2026 * 100) : null;
+      const percent2025 = total2025 > 0 ? Math.round(item.count2025 / total2025 * 100) : null;
+
+      return {
+        answer: item.answer,
+        delta: (percent2026 !== null && percent2025 !== null) ? percent2026 - percent2025 : null
+      };
+
+    });
+
+  },
+
+  /**
+   * Плоский список изменений между периодами из reportData.comparison —
+   * входные данные для selectDramaticChanges_. Пустой массив, если
+   * сравнение выключено (reportData.comparison нет).
+   *
+   * Источники, в порядке добавления:
+   * 1. comparison.averageRatings — по одной записи на вопрос (kind:
+   *    "rating", answerLabel null).
+   * 2. comparison.distributions — по одной записи на каждый вариант
+   *    ответа (kind: "percent"), КРОМЕ:
+   *    - вопросов из DRAMATIC_CHANGE_EXCLUDED_QUESTIONS_ (демография,
+   *      не мнение);
+   *    - вопросов типа rating5 (question.type === "rating5") — их
+   *      средний балл уже учтен через averageRatings; включить сюда еще
+   *      и процент по конкретной оценке (например, "Рабочий стол: 5")
+   *      значило бы сообщить об одном и том же сдвиге дважды.
+   *    Проценты берутся не как есть из comparison.distributions, а
+   *    пересчитываются через recomputeDistributionDeltasExcludingNeutral_ —
+   *    без учета "затрудняюсь ответить"/"не пользовался" в знаменателе
+   *    (см. эту функцию), поэтому и сам вариант-неответ в результат
+   *    не попадает.
+   * 3. comparison.enps.categories — доли промоутеров/нейтралов/критиков,
+   *    та же природа метрики, что и проценты в distributions (kind:
+   *    "percent"), questionTitle фиксированно "eNPS".
+   *
+   * Записи с delta === null (год без валидных ответов, см. Comparison.gs,
+   * либо после исключения неответа знаменатель года обнулился, см.
+   * recomputeDistributionDeltasExcludingNeutral_) в список не попадают
+   * вовсе — их не с чем сравнивать, а не "изменение ниже порога".
+   *
+   * Не читает лист — источник только reportData (пересчет процентов
+   * внутри — по уже готовым count2026/count2025, без обращения к сырым
+   * строкам), поэтому подходит для любого среза, для которого он построен.
+   *
+   * @param {Object} reportData
+   * @returns {Array<{questionTitle: string, answerLabel: string|null, delta: number, kind: "percent"|"rating", direction: "up"|"down"}>}
+   */
+  buildDramaticChangesInput_(reportData) {
+
+    const comparison = reportData.comparison;
+
+    if (!comparison) {
+      return [];
+    }
+
+    const changes = [];
+
+    comparison.averageRatings.forEach(item => {
+
+      if (item.delta === null) {
+        return;
+      }
+
+      changes.push({
+        questionTitle: item.question,
+        answerLabel: null,
+        delta: item.delta,
+        kind: "rating",
+        direction: item.delta > 0 ? "up" : "down"
+      });
+
+    });
+
+    comparison.distributions.forEach(entry => {
+
+      if (this.DRAMATIC_CHANGE_EXCLUDED_QUESTIONS_.indexOf(entry.question.title) !== -1) {
+        return;
+      }
+
+      if (entry.question.type === "rating5") {
+        return;
+      }
+
+      this.recomputeDistributionDeltasExcludingNeutral_(entry.items).forEach(item => {
+
+        if (item.delta === null) {
+          return;
+        }
+
+        changes.push({
+          questionTitle: entry.question.title,
+          answerLabel: item.answer,
+          delta: item.delta,
+          kind: "percent",
+          direction: item.delta > 0 ? "up" : "down"
+        });
+
+      });
+
+    });
+
+    comparison.enps.categories.forEach(category => {
+
+      if (category.delta === null) {
+        return;
+      }
+
+      changes.push({
+        questionTitle: "eNPS",
+        answerLabel: this.ENPS_CATEGORY_LABELS_[category.category],
+        delta: category.delta,
+        kind: "percent",
+        direction: category.delta > 0 ? "up" : "down"
+      });
+
+    });
+
+    return changes;
+
+  },
+
+  /**
+   * Из плоского списка изменений (buildDramaticChangesInput_ либо любой
+   * другой источник той же формы) отбирает "драматичные" — те, чей
+   * |delta| не ниже порога своего kind (DRAMATIC_CHANGE_THRESHOLD_PERCENT_
+   * для "percent", DELTA_THRESHOLD_RATING для "rating") — и сортирует по
+   * убыванию |delta|, самые резкие сдвиги первыми.
+   *
+   * Не читает reportData/лист: принимает готовый список change-записей,
+   * поэтому подходит для любого среза (общий отчет, департамент и т.д.),
+   * а не только для reportData.comparison как есть.
+   *
+   * @param {Array<{questionTitle: string, answerLabel: string|null, delta: number, kind: "percent"|"rating", direction: "up"|"down"}>} changes
+   * @returns {Array} тот же тип записей, отфильтрованный и отсортированный
+   */
+  selectDramaticChanges_(changes) {
+
+    return changes
+      .filter(change => Math.abs(change.delta) >= this.dramaticChangeThreshold_(change.kind))
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+  },
+
+  /**
+   * Порог "драматичности" для одного вида метрики (см. selectDramaticChanges_).
+   */
+  dramaticChangeThreshold_(kind) {
+    return kind === "rating" ? this.DELTA_THRESHOLD_RATING : this.DRAMATIC_CHANGE_THRESHOLD_PERCENT_;
+  },
+
+  /**
+   * Одна фраза-интерпретация того, ЗА СЧЕТ ЧЕГО изменился eNPS между
+   * периodами — не просто "eNPS вырос/упал на N", а разбор структуры
+   * (промоутеры/нейтралы/критики), чтобы Short Summary не заставлял
+   * читателя самому сопоставлять три отдельные дельты. null, если
+   * сравнения нет, данных для сравнения нет, либо изменение eNPS не
+   * дотягивает до порога "драматичности" — тогда этот абзац просто не
+   * нужен.
+   *
+   * Источник данных — reportData.comparison.enps (Comparison.compareENPS),
+   * тот же объект, что уже используется buildDramaticChangesInput_/
+   * buildEnpsSummaryLine_. Ничего не пересчитывает.
+   *
+   * Правила проверяются по порядку, отдельно на первом подошедшем:
+   * 1. Данных для сравнения нет (comparison отсутствует, либо у eNPS или
+   *    любой из трех категорий delta === null) — null.
+   * 2. Критики практически не изменились (|delta| <= 1 п.п.), а
+   *    промоутеры и нейтралы сдвинулись в противоположные стороны и оба
+   *    сдвига не близки к нулю (порог тот же, что и "драматичность" в
+   *    selectDramaticChanges_, DRAMATIC_CHANGE_THRESHOLD_PERCENT_) —
+   *    переток между промоутерами и нейтралами.
+   * 3. Критики сдвинулись заметно (|delta| > 1 п.п.) и это основной
+   *    вклад в изменение eNPS (|delta критиков| больше |delta
+   *    промоутеров|) — доминирующий фактор критики.
+   * 4. Промоутеры и критики оба меняются значимо и в одну и ту же
+   *    "хорошую"/"плохую" сторону для eNPS (промоутеры растут и критики
+   *    падают, либо наоборот) — два фактора усиливают друг друга.
+   * 5. Ни один из структурных факторов не доминирует, но сам eNPS
+   *    изменился заметно — нейтральная фраза без указания причины.
+   * 6. eNPS изменился, но не заметно (ниже порога) — null.
+   *
+   * @param {Object} reportData
+   * @returns {string|null}
+   */
+  interpretEnpsShift_(reportData) {
+
+    const comparison = reportData.comparison;
+
+    if (!comparison) {
+      return null;
+    }
+
+    const enps = comparison.enps;
+
+    const byCategory = {};
+    enps.categories.forEach(category => { byCategory[category.category] = category; });
+
+    const promoters = byCategory.promoters;
+    const neutrals = byCategory.neutrals;
+    const detractors = byCategory.detractors;
+
+    if (enps.delta === null || promoters.delta === null || neutrals.delta === null || detractors.delta === null) {
+      return null;
+    }
+
+    const threshold = this.DRAMATIC_CHANGE_THRESHOLD_PERCENT_;
+
+    // Правило 2: критики стабильны, изменение — переток между
+    // промоутерами и нейтралами (произведение дельт < 0 значит разные
+    // знаки и что ни одна из них не равна нулю).
+    if (Math.abs(detractors.delta) <= 1 &&
+        promoters.delta * neutrals.delta < 0 &&
+        Math.abs(promoters.delta) >= threshold &&
+        Math.abs(neutrals.delta) >= threshold) {
+
+      const growing = promoters.delta > 0 ? promoters : neutrals;
+      const shrinking = promoters.delta > 0 ? neutrals : promoters;
+      const growingLabel = growing === promoters ? "промоутеров" : "нейтралов";
+      const shrinkingLabel = shrinking === promoters ? "промоутеров" : "нейтралов";
+
+      return "eNPS изменился на " + this.formatSignedDelta_(enps.delta, " п.п.") +
+        " за счет перетока между промоутерами и нейтралами: доля " + growingLabel +
+        " выросла на " + Math.abs(growing.delta) + " п.п. (до " + growing.percent2026 + "%), доля " +
+        shrinkingLabel + " сократилась на " + Math.abs(shrinking.delta) + " п.п. (до " + shrinking.percent2026 + "%). " +
+        "Доля критиков " + (detractors.delta === 0 ? "не изменилась" : "почти не изменилась") +
+        " (" + detractors.percent2026 + "%).";
+
+    }
+
+    // Правило 3: критики — основной вклад в изменение eNPS.
+    if (Math.abs(detractors.delta) > 1 && Math.abs(detractors.delta) > Math.abs(promoters.delta)) {
+
+      const verb = enps.delta >= 0 ? "вырос" : "снизился";
+      const criticsVerb = detractors.delta > 0 ? "рост" : "снижение";
+
+      return "eNPS " + verb + " на " + Math.abs(enps.delta) + " п.п. — основной вклад вносит " +
+        criticsVerb + " доли критиков (" + this.formatSignedDelta_(detractors.delta, " п.п.") +
+        ", до " + detractors.percent2026 + "%).";
+
+    }
+
+    // Правило 4: промоутеры и критики одновременно значимо двигаются в
+    // одну и ту же сторону для eNPS (разные знаки дельт: рост
+    // промоутеров + падение критиков — обе "хорошие", и наоборот).
+    if (Math.abs(promoters.delta) >= threshold &&
+        Math.abs(detractors.delta) >= threshold &&
+        promoters.delta * detractors.delta < 0) {
+
+      const verb = enps.delta >= 0 ? "вырос" : "снизился";
+      const promotersVerb = promoters.delta > 0 ? "растет" : "сокращается";
+      const detractorsVerb = detractors.delta > 0 ? "растет" : "сокращается";
+
+      return "eNPS " + verb + " на " + Math.abs(enps.delta) + " п.п. — одновременно " + promotersVerb +
+        " доля промоутеров (" + this.formatSignedDelta_(promoters.delta, " п.п.") + ", до " + promoters.percent2026 + "%) и " +
+        detractorsVerb + " доля критиков (" + this.formatSignedDelta_(detractors.delta, " п.п.") + ", до " + detractors.percent2026 + "%): " +
+        "эффекты усиливают друг друга.";
+
+    }
+
+    // Правило 5: доминирующего фактора нет, но само eNPS изменилось заметно.
+    if (Math.abs(enps.delta) >= threshold) {
+
+      const verb = enps.delta >= 0 ? "вырос" : "снизился";
+
+      return "eNPS " + verb + " на " + Math.abs(enps.delta) + " п.п., но явного доминирующего фактора в структуре " +
+        "промоутеров/нейтралов/критиков не выявлено (промоутеры " + this.formatSignedDelta_(promoters.delta, " п.п.") +
+        ", нейтралы " + this.formatSignedDelta_(neutrals.delta, " п.п.") + ", критики " +
+        this.formatSignedDelta_(detractors.delta, " п.п.") + ").";
+
+    }
+
+    // Правило 6: изменение eNPS ниже порога "драматичности".
+    return null;
 
   },
 
@@ -2258,6 +2868,351 @@ const ReportBuilder = {
     }
 
     return filter.question + "=" + filter.values.join(", ");
+
+  },
+
+  // Словарь тем для детектора темы/тональности открытых комментариев.
+  // triggers — по чему тема считается упомянутой (подстрокой, без учета
+  // регистра; специально заданы основами слов без окончаний, чтобы
+  // одна запись матчила все словоформы — например "бюрократ" matчит и
+  // "бюрократия", и "бюрократии", и "бюрократический"). negative/positive —
+  // маркеры тональности, которые ищутся не по всему комментарию, а только
+  // в предложении(ях), где нашелся триггер (см. matchCommentThemes_).
+  THEME_DICTIONARY_: [
+    { theme: "Бюрократия/процессы",
+      triggers: ["бюрократ", "процесс", "youtrack", "ютрек", "согласовани", "регламент", "трекать время", "трекинг"],
+      negative: ["сложно", "долго", "мешает", "усложн", "перегруж", "хаос", "тяжело", "непонятно"],
+      positive: ["упрости", "стало лучше", "устраива", "понятно", "хорошо налажен"] },
+    { theme: "Корпоративы/общие мероприятия",
+      triggers: ["корпоратив", "тимбилдинг"],
+      negative: ["вернуть", "не хватает", "сократили", "мало", "отменили", "реже", "объединили"],
+      positive: ["нравится", "отлично организован", "спасибо за"] },
+    { theme: "Слёты/командировки (логистика)",
+      triggers: ["слёт", "слет", "командировк", "размещени", "гостиниц", "билет"],
+      negative: ["доплата", "за свой счёт", "мизерн", "одиночн", "неудобно"],
+      positive: ["достаточно", "хорошо организован"] },
+    { theme: "Зарплата/индексация",
+      triggers: ["зарплат", "оклад", "индексаци", "13-я", "премия", "премиальн"],
+      negative: ["не поспевает", "мало", "недоволен", "ниже рынка", "редко пересматр", "инфляц"],
+      positive: ["устраива", "справедлив", "вовремя"] },
+    { theme: "ДМС",
+      triggers: ["дмс"],
+      negative: ["плохо", "неудобно", "ограничен список", "слабое", "не работает", "узкий"],
+      positive: ["хорошее", "устраива", "добавили"] },
+    { theme: "Удалёнка/изоляция",
+      triggers: ["удаленщик", "удалённ", "живого общения"],
+      negative: ["не хватает", "изолирован", "редко видим", "забыт"],
+      positive: ["достаточно", "хватает"] },
+    { theme: "Компенсация спорта",
+      triggers: ["спорт", "тренаж", "фитнес"],
+      negative: ["нет", "хотелось бы", "не хватает"],
+      positive: ["есть", "компенсир"] },
+    { theme: "Мерч",
+      triggers: ["мерч"],
+      negative: ["плохой", "забыли", "редко", "не дошёл", "хреновый"],
+      positive: ["классный", "качественный", "спасибо"] },
+    { theme: "IT-ипотека/жильё",
+      triggers: ["ипотек"],
+      negative: ["нет возможности", "вернуть", "забрали", "льготн"],
+      positive: [] },
+    { theme: "Бытовые условия офиса",
+      triggers: ["кондиционер", "вентиляц", "туалет", "столов", "кофемашин", "парковк", "душно", "шумно"],
+      negative: ["сломан", "не работает", "тесно", "мало", "плохо"],
+      positive: ["хорошо", "отремонтир"] },
+    { theme: "Рабочая техника/оборудование",
+      triggers: ["ноутбук", "компьютер", "монитор", "оперативн памят", "ядр"],
+      negative: ["слаб", "старый", "не хватает", "маловато"],
+      positive: ["норм", "хорошая"] },
+    { theme: "Гибкость графика",
+      triggers: ["4-дневк", "no-meeting", "гибкий график", "шестичасов"],
+      negative: ["хотелось бы", "нет", "не хватает"],
+      positive: ["есть", "устраива"] },
+    { theme: "Обратная связь/1-on-1",
+      triggers: ["обратн связь", "перфоманс ревью", "1 на 1", "фидбэк"],
+      negative: ["редко", "не хватает", "непонятно", "формальн"],
+      positive: ["хорошая", "регулярн"] },
+    { theme: "Карьерный рост/грейды",
+      triggers: ["карьерн рост", "грейд", "трек развития", "повышени"],
+      negative: ["непрозрачн", "нет системы", "сложно"],
+      positive: ["есть", "понятно"] },
+    { theme: "Прозрачность стратегии",
+      triggers: ["стратеги", "планы компании", "цели компании", "куда движ"],
+      negative: ["непонятно", "не рассказывают", "нет информации"],
+      positive: ["понятно", "рассказывают"] },
+    { theme: "Доступ к инструментам (VPN/нейросети)",
+      // "ии" исключен из триггеров: как подстрока он матчит почти любое
+      // слово в родительном/предложном падеже ("компании", "экономии" и
+      // т.п.), из-за чего тема ложно срабатывала на 74 из 514
+      // комментариев практически без отношения к теме VPN/нейросетей —
+      // обнаружено при ручной проверке словаря на реальных данных.
+      triggers: ["впн", "нейросет", "ai"],
+      negative: ["нет доступа", "самим искать"],
+      positive: ["есть доступ"] },
+    { theme: "Токсичность/культура критики",
+      triggers: ["критик", "токсичн", "штыки"],
+      negative: ["не воспринимают", "боятся"],
+      positive: ["конструктивн", "открытость"] }
+  ],
+
+  // Мусорный остаток после вычитания всех известных чекбокс-вариантов из
+  // "Ценишь в компании"/"Зоны роста компании" — пунктуация без смысла,
+  // не свободный текст. Семантически пустые, но осмысленные фразы
+  // ("ничего", "всё устраивает") сюда намеренно не входят: они не
+  // заденут ни один триггер темы и вреда не несут, а фильтровать их
+  // отдельным списком было бы гаданием по формулировкам.
+  EMPTY_COMMENT_REMAINDERS_: ["", "-", ".", "\\-"],
+
+  /**
+   * Тексты для детектора тем/тональности: "Открытая ОС 1"/"Открытая ОС 2"
+   * как есть, плюс свободный текст из "Ценишь в компании"/"Зоны роста
+   * компании" — эти два вопроса в анкете являются чекбоксами С полем
+   * "свой вариант" в той же ячейке (варианты и свой текст разделены тем
+   * же ".," что и в Statistics.parseMultiAnswer_/calculateAnswerFrequencies),
+   * поэтому сначала из ячейки вычитаются все части, совпадающие с
+   * каталожным списком вариантов (см. extractCommentRemainder_), и в
+   * список комментариев попадает только то, что осталось.
+   *
+   * Источник — reportData.filteredRows/headers (уже отфильтрованные под
+   * текущий срез), а не reportData.distributions/topAnswers — эти два
+   * вопроса нигде в стандартном конвейере отчета не собираются
+   * (report:false/display:"❌" в Questions.gs), готового массива для них
+   * нет.
+   *
+   * @param {Object} reportData
+   * @returns {Array<string>}
+   */
+  buildCommentsForThemeDetection_(reportData) {
+
+    const headers = reportData.headers;
+    const rows = reportData.filteredRows;
+    const comments = [];
+
+    ["Открытая ОС 1", "Открытая ОС 2"].forEach(title => {
+
+      const columnIndex = this.findQuestionColumnIndex_(headers, title);
+
+      if (columnIndex === -1) {
+        return;
+      }
+
+      rows.forEach(row => {
+
+        const text = String(row[columnIndex] || "").trim();
+
+        if (text) {
+          comments.push(text);
+        }
+
+      });
+
+    });
+
+    Questions.getTopAnswerQuestions().forEach(question => {
+
+      const columnIndex = this.findQuestionColumnIndex_(headers, question.title);
+
+      if (columnIndex === -1) {
+        return;
+      }
+
+      rows.forEach(row => {
+
+        const remainder = this.extractCommentRemainder_(row[columnIndex], question.answers);
+
+        if (remainder) {
+          comments.push(remainder);
+        }
+
+      });
+
+    });
+
+    return comments;
+
+  },
+
+  /**
+   * Индекс столбца по названию вопроса, без учета регистра/пробелов —
+   * тот же способ сравнения заголовков, что и везде в Statistics.
+   */
+  findQuestionColumnIndex_(headers, title) {
+
+    return headers.findIndex(header => Statistics.normalize_(header) === Statistics.normalize_(title));
+
+  },
+
+  /**
+   * Части чекбокс-ячейки с полем "свой вариант" — та же сериализация,
+   * что разбирает Statistics.parseMultiAnswer_ (разделитель ".," между
+   * вариантами, срез висячей точки у каждой части). Отдельная копия, а
+   * не вызов Statistics.parseMultiAnswer_ напрямую — это внутренний
+   * (с подчеркиванием) метод Statistics, реализующий его собственный
+   * разбор, а не общий API между модулями.
+   */
+  parseCheckboxCellParts_(raw) {
+
+    const text = String(raw || "").trim();
+
+    if (!text) {
+      return [];
+    }
+
+    return text
+      .split(/\.,\s*/)
+      .map(part => part.trim().replace(/\.$/, "").trim())
+      .filter(part => part.length > 0);
+
+  },
+
+  /**
+   * Остаток ячейки чекбокс-вопроса после вычитания всех частей, которые
+   * являются выбранными вариантами из канонического списка (question.answers,
+   * см. Questions.parseAnswers_). Сравнение — не на точное равенство, а на
+   * "часть начинается с канонического варианта" после нормализации
+   * (регистр, пробелы): реальный текст чекбокса в ячейке — это полная
+   * формулировка из формы ("Стабильность: официальное оформление,
+   * своевременные выплаты зарплаты, оплачиваемые отпуска и пр"), а
+   * каталог в Questions.gs хранит только ее сокращенный лейбл
+   * ("Стабильность") — точное совпадение почти никогда не сработало бы
+   * и оставляло бы полный чекбокс-текст в остатке.
+   *
+   * null, если после вычитания ничего значимого не осталось (все части
+   * распознаны как чекбоксы, либо остаток — чистая пунктуация без
+   * смысла, см. EMPTY_COMMENT_REMAINDERS_).
+   *
+   * @param {*} raw - сырое значение ячейки
+   * @param {Array<string>} canonicalAnswers - question.answers
+   * @returns {string|null}
+   */
+  extractCommentRemainder_(raw, canonicalAnswers) {
+
+    const parts = this.parseCheckboxCellParts_(raw);
+
+    if (parts.length === 0) {
+      return null;
+    }
+
+    const normalizedCanonical = canonicalAnswers.map(answer => this.normalizeForCheckboxMatch_(answer));
+
+    const leftover = parts.filter(part => {
+      const normalizedPart = this.normalizeForCheckboxMatch_(part);
+      return !normalizedCanonical.some(canonicalAnswer => normalizedPart.indexOf(canonicalAnswer) === 0);
+    });
+
+    const text = leftover.join(" ").trim();
+
+    return this.EMPTY_COMMENT_REMAINDERS_.indexOf(text) === -1 ? text : null;
+
+  },
+
+  normalizeForCheckboxMatch_(text) {
+    return String(text).trim().toLowerCase().replace(/\s+/g, " ");
+  },
+
+  /**
+   * Темы и тональность, найденные в ОДНОМ комментарии — по одной записи
+   * на тему (не на предложение и не на срабатывание маркера), см.
+   * detectCommentThemes_ про смысл "одного вердикта на пару
+   * комментарий+тема".
+   *
+   * "Окно" поиска маркеров тональности — не весь комментарий, а
+   * объединение только тех предложений, где нашелся хотя бы один
+   * триггер темы (предложения разделяются точками и переносами строк).
+   * Если тема упомянута в нескольких предложениях одного комментария —
+   * маркеры ищутся по объединению всех этих предложений сразу, и это
+   * все равно один результат на тему, а не несколько.
+   *
+   * @param {string} comment
+   * @returns {Array<{theme: string, tone: "negative"|"positive"|"mixed"|"neutral"}>}
+   */
+  matchCommentThemes_(comment) {
+
+    const lowerSentences = comment
+      .split(/[.\n]+/)
+      .map(sentence => sentence.toLowerCase())
+      .filter(sentence => sentence.trim().length > 0);
+
+    const results = [];
+
+    this.THEME_DICTIONARY_.forEach(entry => {
+
+      const matchingSentences = lowerSentences.filter(sentence =>
+        entry.triggers.some(trigger => sentence.indexOf(trigger.toLowerCase()) !== -1)
+      );
+
+      if (matchingSentences.length === 0) {
+        return;
+      }
+
+      const window = matchingSentences.join(" ");
+
+      const hasNegative = entry.negative.some(marker => window.indexOf(marker.toLowerCase()) !== -1);
+      const hasPositive = entry.positive.some(marker => window.indexOf(marker.toLowerCase()) !== -1);
+
+      const tone = hasNegative && hasPositive ? "mixed" : hasNegative ? "negative" : hasPositive ? "positive" : "neutral";
+
+      results.push({ theme: entry.theme, tone: tone });
+
+    });
+
+    return results;
+
+  },
+
+  /**
+   * Темы и тональность по списку комментариев — не читает reportData,
+   * работает с любым переданным списком, поэтому подходит для любого
+   * среза. Использует matchCommentThemes_ на каждом комментарии и
+   * агрегирует результат по темам.
+   *
+   * Порог включения темы в результат — total > 1 (см. задачу): тема,
+   * упомянутая ровно один раз во всем списке, отсекается как случайное
+   * совпадение, а не сигнал.
+   *
+   * @param {Array<string>} comments
+   * @returns {Array<{theme: string, negative: number, positive: number, mixed: number, neutral: number, total: number}>}
+   *          отсортировано по total по убыванию
+   */
+  detectCommentThemes_(comments) {
+
+    const totalsByTheme = {};
+
+    comments.forEach(comment => {
+
+      if (!comment) {
+        return;
+      }
+
+      this.matchCommentThemes_(comment).forEach(match => {
+
+        if (!totalsByTheme[match.theme]) {
+          totalsByTheme[match.theme] = { negative: 0, positive: 0, mixed: 0, neutral: 0 };
+        }
+
+        totalsByTheme[match.theme][match.tone]++;
+
+      });
+
+    });
+
+    return Object.keys(totalsByTheme)
+      .map(theme => {
+
+        const counts = totalsByTheme[theme];
+        const total = counts.negative + counts.positive + counts.mixed + counts.neutral;
+
+        return {
+          theme: theme,
+          negative: counts.negative,
+          positive: counts.positive,
+          mixed: counts.mixed,
+          neutral: counts.neutral,
+          total: total
+        };
+
+      })
+      .filter(entry => entry.total > 1)
+      .sort((a, b) => b.total - a.total);
 
   }
 
