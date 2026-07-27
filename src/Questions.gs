@@ -60,26 +60,6 @@ const Questions = {
 
   },
 
-  getCityQuestion() {
-
-    return this.getQuestionByColumn_("B");
-
-  },
-
-  getDepartmentQuestion() {
-
-    return this.getQuestionByColumn_("C");
-
-  },
-
-  getENPSQuestion() {
-
-    return this.toQuestion_(this.catalogue.find(question => {
-      return question.type === "enps";
-    }));
-
-  },
-
   /**
    * Вопросы со средними.
    */
@@ -114,18 +94,6 @@ const Questions = {
   getTopAnswerQuestions() {
 
     return this.getAll().filter(question => question.display === "Топ 5");
-
-  },
-
-  /**
-   * Найти вопрос в каталоге по букве столбца и привести его
-   * к нормальному виду.
-   */
-  getQuestionByColumn_(column) {
-
-    const question = this.catalogue.find(q => q.column === column);
-
-    return question ? this.toQuestion_(question) : null;
 
   },
 
