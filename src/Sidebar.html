@@ -922,6 +922,8 @@
             r.checkbox.checked = r.option.selected;
           });
 
+          chipBox.style.display = selected.length === 0 ? 'none' : '';
+
           count.textContent = 'Выбрано: ' + selected.length;
           updateChipOverflow();
         }
