@@ -967,11 +967,31 @@ const ReportBuilder = {
    *      средний балл уже учтен через averageRatings; включить сюда еще
    *      и процент по конкретной оценке (например, "Рабочий стол: 5")
    *      значило бы сообщить об одном и том же сдвиге дважды.
-   *    Проценты берутся не как есть из comparison.distributions, а
-   *    пересчитываются через recomputeDistributionDeltasExcludingNeutral_ —
-   *    без учета "затрудняюсь ответить"/"не пользовался" в знаменателе
-   *    (см. эту функцию), поэтому и сам вариант-неответ в результат
-   *    не попадает.
+   *    Для вопросов со шкалой Да/Скорее да/Скорее нет/Нет, у которых уже
+   *    есть настроенная агрегированная пара "Устраивает/Не устраивает"
+   *    (Questions.isYesNoScale + YES_NO_SUMMARIES_, см.
+   *    getYesNoBlockConfig_/aggregateAnswerBuckets_ — тот же блок, что
+   *    уже отображается в отчете) — ОДНА запись на вопрос, а не на
+   *    каждый из 4 исходных вариантов ответа и не на обе агрегированные
+   *    группы. Положительная и отрицательная группы зеркальны (delta
+   *    одной равна -delta другой) — это один и тот же факт с двух
+   *    сторон, поэтому в список идет только отрицательная/нежелательная
+   *    группа (bucket.direction === "down", 🔴 в getYesNoBlockConfig_),
+   *    а не та из двух, что случайно больше по модулю. Так соседние
+   *    градации одного знака (например, "да" ▼ и "скорее да" ▲) не
+   *    попадают в блок как две противоречащие друг другу строки, и один
+   *    и тот же сдвиг не занимает в топе два слота вместо одного —
+   *    берется уже готовая, посчитанная для этого же блока в отчете
+   *    дельта агрегированной группы (aggregateAnswerBuckets_
+   *    переиспользуется как есть, без пересчета). Если у вопроса нет
+   *    настроенной сводки в YES_NO_SUMMARIES_ (blockConfig === null) —
+   *    вопрос логируется и пропускается целиком (ни агрегированных, ни
+   *    исходных записей), чтобы не возвращать старую нестыковку.
+   *    Остальные вопросы (не Да/Нет-шкала) — как раньше, проценты берутся
+   *    не как есть из comparison.distributions, а пересчитываются через
+   *    recomputeDistributionDeltasExcludingNeutral_ — без учета
+   *    "затрудняюсь ответить"/"не пользовался" в знаменателе (см. эту
+   *    функцию), поэтому и сам вариант-неответ в результат не попадает.
    * 3. comparison.enps.categories — доли промоутеров/нейтралов/критиков,
    *    та же природа метрики, что и проценты в distributions (kind:
    *    "percent"), questionTitle фиксированно "eNPS".
@@ -1022,6 +1042,42 @@ const ReportBuilder = {
 
       if (entry.question.type === "rating5") {
         return;
+      }
+
+      if (Questions.isYesNoScale(entry.question)) {
+
+        const blockConfig = this.getYesNoBlockConfig_(entry.question);
+
+        if (!blockConfig) {
+          console.warn(
+            "buildDramaticChangesInput_: нет агрегированной пары (YES_NO_SUMMARIES_) для вопроса Да/Нет-шкалы \"" +
+            entry.question.title + "\" — вопрос пропущен в блоке \"Заметные изменения\"."
+          );
+          return;
+        }
+
+        // Бакеты "положительная/отрицательная группа" зеркальны (delta
+        // одной равна -delta другой) — это один и тот же факт, поэтому в
+        // "Заметные изменения" попадает только отрицательная сторона
+        // (bucket.direction === "down", т.е. 🔴-группа из
+        // getYesNoBlockConfig_), а не та, что случайно больше по модулю.
+        const negativeBucket = this.aggregateAnswerBuckets_(entry.items, blockConfig.buckets)
+          .find(bucket => bucket.direction === "down");
+
+        if (!negativeBucket || negativeBucket.delta === null || negativeBucket.delta === undefined) {
+          return;
+        }
+
+        changes.push({
+          questionTitle: entry.question.title,
+          answerLabel: this.stripBucketLabelEmoji_(negativeBucket.label),
+          delta: negativeBucket.delta,
+          kind: "percent",
+          direction: negativeBucket.delta > 0 ? "up" : "down"
+        });
+
+        return;
+
       }
 
       this.recomputeDistributionDeltasExcludingNeutral_(entry.items).forEach(item => {
@@ -1971,6 +2027,15 @@ const ReportBuilder = {
 
     });
 
+  },
+
+  /**
+   * bucket.label ("🟢 Мнение учитывается") без ведущего эмодзи-маркера —
+   * для текста в блоке "Заметные изменения" (buildDramaticChangesInput_),
+   * где эмодзи уже избыточен (там своя стрелка Δ, см. formatSignedDelta_).
+   */
+  stripBucketLabelEmoji_(label) {
+    return label.replace(/^\S+\s+/, "");
   },
 
   /**
