@@ -3,6 +3,8 @@ function onOpen() {
     .createMenu('HR Analytics')
     .addItem('Создать отчет', 'showSidebar')
     .addItem('Убрать из сводной строки без отчета', 'pruneSummaryDeletedSamples')
+    .addSeparator()
+    .addItem('Расширенная аналитика', 'runAdvancedAnalytics')
     .addToUi();
 }
 
