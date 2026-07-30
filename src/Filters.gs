@@ -51,7 +51,10 @@ const Filters = {
    */
   sortOptionsByFrequency(options, questionTitle, headers, data) {
 
-    const columnIndex = headers.indexOf(questionTitle);
+    const target = String(questionTitle).trim().toLowerCase().replace(/\s+/g, " ");
+    const columnIndex = headers.findIndex(
+      h => String(h).trim().toLowerCase().replace(/\s+/g, " ") === target
+    );
 
     if (columnIndex === -1) {
       return options;
@@ -67,15 +70,15 @@ const Filters = {
         return;
       }
 
-      const key = String(raw).trim().toLowerCase();
+      const key = String(raw).trim().toLowerCase().replace(/\s+/g, " ");
       counts[key] = (counts[key] || 0) + 1;
 
     });
 
     return options.slice().sort((a, b) => {
 
-      const countA = counts[a.trim().toLowerCase()] || 0;
-      const countB = counts[b.trim().toLowerCase()] || 0;
+      const countA = counts[a.trim().toLowerCase().replace(/\s+/g, " ")] || 0;
+      const countB = counts[b.trim().toLowerCase().replace(/\s+/g, " ")] || 0;
 
       if (countB !== countA) {
         return countB - countA;

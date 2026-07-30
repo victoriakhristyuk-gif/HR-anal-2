@@ -8,33 +8,39 @@ const Statistics = {
 
   /**
    * Расчет eNPS
+   *
+   * HR-002: категоризация (Scoring.enpsCategory) и знаменатель
+   * (Scoring.vector) — те же, что в AnalyticsService/Segments/Cohort/
+   * Drivers, поэтому основной отчет, сводная и расширенная аналитика
+   * больше не могут разойтись по eNPS/категориям/базе. Раньше здесь
+   * читали Number(row[enpsColumn]) напрямую и отсеивали только isNaN —
+   * а Number("") === 0, из-за чего пустая ячейка eNPS молча считалась
+   * критиком. Scoring.vector корректно возвращает для нее null.
    */
   calculateENPS(rows, headers) {
+
+    const enpsQuestion = Questions.getAll().find(question => question.type === "enps");
 
     // Сравнение без учета регистра/пробелов — см. calculateDistribution.
     const enpsColumn = headers.findIndex(header => this.normalize_(header) === "enps");
 
-    if (enpsColumn === -1) {
+    if (!enpsQuestion || enpsColumn === -1) {
       throw new Error("Не найден столбец eNPS");
     }
+
+    const vector = Scoring.vector(rows, headers, enpsQuestion);
 
     let promoters = 0;
     let neutrals = 0;
     let detractors = 0;
 
-    rows.forEach(row => {
+    vector.forEach(value => {
 
-      const value = Number(row[enpsColumn]);
+      const category = Scoring.enpsCategory(value);
 
-      if (isNaN(value)) return;
-
-      if (value >= 9) {
-        promoters++;
-      } else if (value >= 7) {
-        neutrals++;
-      } else {
-        detractors++;
-      }
+      if (category === "promoters") promoters++;
+      else if (category === "neutrals") neutrals++;
+      else if (category === "detractors") detractors++;
 
     });
 
@@ -51,7 +57,7 @@ const Statistics = {
       detractorsPercent: total ? Math.round(detractors / total * 100) : 0,
 
       enps: total
-        ? Math.round(((promoters - detractors) / total) * 100)
+        ? Math.round(MathStats.enpsConfidence(promoters, detractors, total).enps)
         : 0
     };
 
@@ -191,7 +197,7 @@ const Statistics = {
    * Нормализация строки для сравнения без учета регистра и пробелов
    */
   normalize_(value) {
-    return String(value).trim().toLowerCase();
+    return String(value).trim().toLowerCase().replace(/\s+/g, " ");
   },
 
   /**

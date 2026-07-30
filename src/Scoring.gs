@@ -113,6 +113,27 @@ const Scoring = {
   },
 
   /**
+   * Единственное место, где определены границы категорий eNPS:
+   * критик 0–6, нейтрал 7–8, промоутер 9–10. Используется везде, где
+   * считается eNPS (Statistics.calculateENPS, AnalyticsService,
+   * Segments, Cohort, Drivers) — HR-002, единый источник правды вместо
+   * пяти независимых копий одного и того же порога.
+   */
+  ENPS_THRESHOLDS: { promoter: 9, neutral: 7 },
+
+  /**
+   * Категория одного валидного (не null) значения eNPS.
+   * @param {Number|null} value
+   * @returns {"promoters"|"neutrals"|"detractors"|null}
+   */
+  enpsCategory(value) {
+    if (value === null || value === undefined) return null;
+    if (value >= this.ENPS_THRESHOLDS.promoter) return "promoters";
+    if (value >= this.ENPS_THRESHOLDS.neutral) return "neutrals";
+    return "detractors";
+  },
+
+  /**
    * Числовой вектор ответов на один вопрос.
    *
    * Длина результата РАВНА длине rows: позиция i в векторе всегда
@@ -327,7 +348,7 @@ const Scoring = {
   },
 
   normalize_(value) {
-    return String(value).trim().toLowerCase();
+    return String(value).trim().toLowerCase().replace(/\s+/g, " ");
   }
 
 };

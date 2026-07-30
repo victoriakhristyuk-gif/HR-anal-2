@@ -48,14 +48,23 @@ const Cohort = {
    * Результат — два массива ОДИНАКОВОЙ длины, где позиция i в обоих
    * относится к одному человеку. Именно это требуется для парного
    * критерия.
+   *
+   * headersBefore задает свой индекс столбца для rowsBefore — заголовки
+   * прошлого года могут идти в другом порядке, чем текущего.
    */
-  build(rowsNow, rowsBefore, headers) {
+  build(rowsNow, rowsBefore, headers, headersBefore) {
+
+    headersBefore = headersBefore || headers;
 
     const columnIndex = headers.findIndex(
       h => String(h).trim().toLowerCase() === this.KEY_QUESTION.trim().toLowerCase()
     );
 
-    if (columnIndex === -1) {
+    const columnIndexBefore = headersBefore.findIndex(
+      h => String(h).trim().toLowerCase() === this.KEY_QUESTION.trim().toLowerCase()
+    );
+
+    if (columnIndex === -1 || columnIndexBefore === -1) {
       return { now: [], before: [], size: 0, reason: "не найден столбец с ключом сопоставления" };
     }
 
@@ -64,7 +73,7 @@ const Cohort = {
 
     rowsBefore.forEach(row => {
 
-      const key = this.key_(row[columnIndex]);
+      const key = this.key_(row[columnIndexBefore]);
 
       if (!key) return;
 
@@ -102,7 +111,7 @@ const Cohort = {
       size: now.length,
       droppedDuplicates: Object.keys(duplicates).length,
       signedNow: rowsNow.filter(r => this.key_(r[columnIndex])).length,
-      signedBefore: rowsBefore.filter(r => this.key_(r[columnIndex])).length
+      signedBefore: rowsBefore.filter(r => this.key_(r[columnIndexBefore])).length
     };
 
   },
@@ -113,7 +122,9 @@ const Cohort = {
    * Возвращает только вопросы, где когорта достаточна, отсортированные
    * по величине изменения. Значимые изменения помечены.
    */
-  changes(cohort, headers, questions) {
+  changes(cohort, headers, headersBefore, questions) {
+
+    headersBefore = headersBefore || headers;
 
     if (cohort.size < 30) {
       return { rows: [], reason: "когорта меньше 30 человек — парный анализ ненадежен", size: cohort.size };
@@ -126,7 +137,7 @@ const Cohort = {
       if (question.type === "text" || question.type === "single") return;
 
       const after = Scoring.vector(cohort.now, headers, question);
-      const beforeVector = Scoring.vector(cohort.before, headers, question);
+      const beforeVector = Scoring.vector(cohort.before, headersBefore, question);
 
       const test = MathStats.pairedTest(after, beforeVector);
 
@@ -161,19 +172,21 @@ const Cohort = {
    * Смотреть надо на ДЕЛЬТУ и на структуру переходов (сколько человек
    * подняли оценку, сколько опустили), а не на уровень.
    */
-  enpsChange(cohort, headers, questions) {
+  enpsChange(cohort, headers, headersBefore, questions) {
+
+    headersBefore = headersBefore || headers;
 
     const enpsQuestion = questions.find(q => q.type === "enps");
 
     if (!enpsQuestion || cohort.size === 0) return null;
 
     const after = Scoring.vector(cohort.now, headers, enpsQuestion);
-    const before = Scoring.vector(cohort.before, headers, enpsQuestion);
+    const before = Scoring.vector(cohort.before, headersBefore, enpsQuestion);
 
     const score = vector => {
       const valid = vector.filter(v => v !== null);
-      const promoters = valid.filter(v => v >= 9).length;
-      const detractors = valid.filter(v => v <= 6).length;
+      const promoters = valid.filter(v => Scoring.enpsCategory(v) === "promoters").length;
+      const detractors = valid.filter(v => Scoring.enpsCategory(v) === "detractors").length;
       return MathStats.enpsConfidence(promoters, detractors, valid.length);
     };
 

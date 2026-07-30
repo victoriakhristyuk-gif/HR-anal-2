@@ -9,14 +9,12 @@
  * с двойной нормой, полностью замаскированных средним.
  *
  * ПРИНЦИП. Норма — это НЕ абстрактное «хорошо», а показатель самой
- * компании за текущий год. Каждый срез сравнивается с ней, и в отчет
- * попадает только то, что вышло за DEVIATION-пороги. Отчет, который
- * печатает все срезы подряд, никто не читает; отчет, который печатает
- * только отклонения, читают.
+ * компании за текущий год. Каждый непустой срез рассчитывается и
+ * показывается независимо от размера. DEVIATION-пороги определяют,
+ * считать ли отличие от нормы заметным, но не скрывают саму группу.
  *
  * ЗАЩИТА ОТ ЛОЖНЫХ НАХОДОК. Чем мельче срез, тем легче случайно
  * получить «отклонение». Поэтому:
- *   – группы меньше MIN_SEGMENT_SIZE не показываются вообще;
  *   – группы меньше FRAGILE_SEGMENT_SIZE помечаются как сигнал;
  *   – при переборе десятков срезов часть «находок» случайна по
  *     определению (проблема множественных сравнений) — поэтому срез
@@ -48,30 +46,50 @@ const Segments = {
    */
   splitBy(rows, headers, questionTitle, normalizer) {
 
-    const target = String(questionTitle).trim().toLowerCase();
-    const columnIndex = headers.findIndex(h => String(h).trim().toLowerCase() === target);
+    const target = this.normalizeKey_(questionTitle);
+    const columnIndex = headers.findIndex(h => this.normalizeKey_(h) === target);
 
     if (columnIndex === -1) return {};
 
     const buckets = {};
+    const labels = {};
 
     rows.forEach(row => {
 
-      let value = row[columnIndex];
+      const raw = row[columnIndex];
 
-      if (value === "" || value === null || value === undefined) return;
+      if (raw === "" || raw === null || raw === undefined) return;
 
-      value = normalizer ? normalizer(String(value).trim()) : String(value).trim();
+      let display = normalizer
+        ? normalizer(String(raw).trim())
+        : String(raw).trim();
 
-      if (!value) return;
+      // "Отдел" — приводим к каноническому названию ДО группировки в
+      // бакет (см. DepartmentAliases), иначе переименованный отдел
+      // попадает в текущем и прошлом годах в разные бакеты и год-к-году
+      // join ниже (по normalizeKey_) их не свяжет.
+      if (this.normalizeKey_(questionTitle) === this.normalizeKey_("Отдел")) {
+        display = DepartmentAliases.canonicalize(display);
+      }
 
-      if (!buckets[value]) buckets[value] = [];
+      if (!display) return;
 
-      buckets[value].push(row);
+      const key = this.normalizeKey_(display);
+
+      if (!buckets[key]) {
+        buckets[key] = [];
+        labels[key] = display;
+      } else if (labels[key] !== display) {
+        console.warn("Segments: «" + display + "» → «" + labels[key] + "» (ключ «" + key + "»)");
+      }
+
+      buckets[key].push(row);
 
     });
 
-    return buckets;
+    const result = {};
+    Object.keys(buckets).forEach(key => { result[labels[key]] = buckets[key]; });
+    return result;
 
   },
 
@@ -81,9 +99,9 @@ const Segments = {
    * В данных 2026 поле заполнялось вручную: 66 вариантов написания,
    * включая «Ростов-на-Дону» и «Ростов на Дону» по отдельности,
    * «удалённо», «перемещаюсь» и четыре ответа «-». Без склейки
-   * получается 60 групп по одному человеку, из которых ни одна
-   * не проходит MIN_SEGMENT_SIZE, и география выпадает из анализа
-   * целиком.
+   * получается около 60 групп по одному человеку: они теперь видны,
+   * но перегружают отчет и не дают содержательной географической
+   * картины.
    *
    * ПРАВИЛЬНОЕ РЕШЕНИЕ — закрытый список в анкете на следующий год.
    * Пока его нет, работает эта склейка.
@@ -131,8 +149,8 @@ const Segments = {
 
       const vector = Scoring.vector(rows, headers, enpsQuestion);
       const valid = vector.filter(v => v !== null);
-      const promoters = valid.filter(v => v >= 9).length;
-      const detractors = valid.filter(v => v <= 6).length;
+      const promoters = valid.filter(v => Scoring.enpsCategory(v) === "promoters").length;
+      const detractors = valid.filter(v => Scoring.enpsCategory(v) === "detractors").length;
 
       const ci = MathStats.enpsConfidence(promoters, detractors, valid.length);
 
@@ -192,18 +210,25 @@ const Segments = {
    * @param {Array<String>} headers
    * @param {Array<Object>} questions
    * @param {String} dimension - по какому вопросу режем
-   * @param {Object} options - {normalizer, previousRows, keyQuestions}
+   * @param {Object} options - {normalizer, previousRows, previousHeaders, keyQuestions}
    */
   analyze(rows, headers, questions, dimension, options) {
 
     options = options || {};
 
+    const previousHeaders = options.previousHeaders || headers;
+
     const company = this.metricsFor(rows, headers, questions);
     const buckets = this.splitBy(rows, headers, dimension, options.normalizer);
 
     const previousBuckets = options.previousRows
-      ? this.splitBy(options.previousRows, headers, dimension, options.normalizer)
+      ? this.splitBy(options.previousRows, previousHeaders, dimension, options.normalizer)
       : {};
+
+    const prevByKey = {};
+    Object.keys(previousBuckets).forEach(k => {
+      prevByKey[this.normalizeKey_(k)] = previousBuckets[k];
+    });
 
     // Вопросы, по которым ищем точечные отклонения средних.
     // Прогонять все 30 бессмысленно: отчет утонет. Берем ключевые.
@@ -214,8 +239,6 @@ const Segments = {
     Object.keys(buckets).forEach(name => {
 
       const group = buckets[name];
-
-      if (group.length < Norms.MIN_SEGMENT_SIZE) return;
 
       const metrics = this.metricsFor(group, headers, questions);
       const deviations = [];
@@ -256,13 +279,24 @@ const Segments = {
 
       });
 
-      // 3. Динамика к прошлому году — только если обе базы достаточны
+      // Стабильный id и примечание о переименовании — только для среза
+      // "Отдел" (см. DepartmentAliases). Для остальных срезов (Город,
+      // Стаж, Формат работы) отдел ни при чем — оставляем null/пусто.
+      const isDepartmentDimension = this.normalizeKey_(dimension) === this.normalizeKey_("Отдел");
+      const departmentId = isDepartmentDimension ? DepartmentAliases.resolve(name).id : null;
+      const renamedFrom = isDepartmentDimension ? DepartmentAliases.getAliasesFor(name) : [];
+
+      // 3. Динамика к прошлому году — для любой непустой базы.
+      // Размер обеих групп сохраняется в результате, а малая текущая
+      // группа отдельно помечается как fragile: данные не скрываются,
+      // но читатель видит ограничение надежности.
       let yearDelta = null;
-      const previousGroup = previousBuckets[name];
+      const previousGroup = prevByKey[this.normalizeKey_(name)];
+      const previousN = previousGroup ? previousGroup.length : 0;
 
-      if (previousGroup && previousGroup.length >= Norms.MIN_SEGMENT_SIZE) {
+      if (previousN > 0) {
 
-        const previousMetrics = this.metricsFor(previousGroup, headers, questions);
+        const previousMetrics = this.metricsFor(previousGroup, previousHeaders, questions);
 
         if (previousMetrics.enps !== null && metrics.enps !== null) {
 
@@ -270,11 +304,16 @@ const Segments = {
 
           yearDelta = {
             previous: previousMetrics.enps,
-            previousN: previousGroup.length,
+            previousN: previousN,
             delta: MathStats.round(delta, 1),
             // Изменение считается заметным, только если превышает
-            // сумму половин доверительных интервалов обоих годов.
-            meaningful: Math.abs(delta) > (metrics.enpsMargin + previousMetrics.enpsMargin) / 2
+            // сумму половин доверительных интервалов обоих годов И обе
+            // базы не помечены как малые. Дельта рассчитывается при
+            // любом n, но не объявляется надежным изменением.
+            meaningful:
+              group.length >= Norms.FRAGILE_SEGMENT_SIZE &&
+              previousN >= Norms.FRAGILE_SEGMENT_SIZE &&
+              Math.abs(delta) > (metrics.enpsMargin + previousMetrics.enpsMargin) / 2
           };
 
         }
@@ -284,12 +323,16 @@ const Segments = {
       segments.push({
         dimension: dimension,
         name: name,
+        departmentId: departmentId,
+        renamedFrom: renamedFrom,
         n: group.length,
+        previousN: previousN,
         metrics: metrics,
         deviations: deviations,
         badCount: deviations.filter(d => d.bad).length,
         yearDelta: yearDelta,
         fragile: group.length < Norms.FRAGILE_SEGMENT_SIZE,
+        previousFragile: previousN > 0 && previousN < Norms.FRAGILE_SEGMENT_SIZE,
         // Срез считается настоящей проблемой, только если плохих
         // отклонений НЕСКОЛЬКО. Одно отклонение при переборе десятков
         // групп — ожидаемая случайность, а не находка.
@@ -319,19 +362,31 @@ const Segments = {
    * против +54). Значит, часть снижения общего eNPS — арифметика
    * состава, а не ухудшение отношения.
    */
-  compositionShift(rowsNow, rowsBefore, headers, dimension, normalizer) {
+  compositionShift(rowsNow, rowsBefore, headers, headersBefore, dimension, normalizer) {
+
+    headersBefore = headersBefore || headers;
 
     const now = this.splitBy(rowsNow, headers, dimension, normalizer);
-    const before = this.splitBy(rowsBefore, headers, dimension, normalizer);
+    const before = this.splitBy(rowsBefore, headersBefore, dimension, normalizer);
 
-    const names = {};
-    Object.keys(now).forEach(k => { names[k] = true; });
-    Object.keys(before).forEach(k => { names[k] = true; });
+    const nowByKey = {};
+    Object.keys(now).forEach(k => { nowByKey[this.normalizeKey_(k)] = { label: k, rows: now[k] }; });
+    const beforeByKey = {};
+    Object.keys(before).forEach(k => { beforeByKey[this.normalizeKey_(k)] = { label: k, rows: before[k] }; });
 
-    return Object.keys(names).map(name => {
+    const allKeys = {};
+    Object.keys(nowByKey).forEach(k => { allKeys[k] = true; });
+    Object.keys(beforeByKey).forEach(k => { allKeys[k] = true; });
 
-      const shareNow = (now[name] ? now[name].length : 0) / rowsNow.length * 100;
-      const shareBefore = (before[name] ? before[name].length : 0) / rowsBefore.length * 100;
+    return Object.keys(allKeys).map(key => {
+
+      const nowEntry = nowByKey[key];
+      const beforeEntry = beforeByKey[key];
+      const name = nowEntry ? nowEntry.label : beforeEntry.label;
+      const nowCount = nowEntry ? nowEntry.rows.length : 0;
+      const beforeCount = beforeEntry ? beforeEntry.rows.length : 0;
+      const shareNow = nowCount / rowsNow.length * 100;
+      const shareBefore = beforeCount / rowsBefore.length * 100;
 
       return {
         name: name,
@@ -344,6 +399,10 @@ const Segments = {
 
     }).sort((a, b) => Math.abs(b.shiftPp) - Math.abs(a.shiftPp));
 
+  },
+
+  normalizeKey_(value) {
+    return String(value).trim().toLowerCase().replace(/\s+/g, " ");
   }
 
 };

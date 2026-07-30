@@ -246,7 +246,7 @@ const AnalyticsWriter = {
     const sheet = this.sheet_(this.SHEETS.SEGMENTS);
 
     const header = [
-      "Разрез", "Группа", "n", "eNPS", "ДИ ±", "eNPS пр. год", "Δ eNPS",
+      "Разрез", "Группа", "n", "eNPS", "ДИ ±", "n пр. год", "eNPS пр. год", "Δ eNPS",
       "Критики, %", "Выгорание, %", "Уход, %", "Отклонений (плохих)", "Отклонения от нормы компании", "Надёжность"
     ];
 
@@ -262,6 +262,7 @@ const AnalyticsWriter = {
         company.n,
         company.enps,
         company.enpsMargin,
+        "",
         "",
         "",
         company.detractors,
@@ -281,12 +282,31 @@ const AnalyticsWriter = {
               (d.bad ? " ⚠" : "")).join(" · ")
           : "в пределах нормы";
 
+        const smallBases = [];
+        if (segment.fragile) smallBases.push("текущий год n=" + segment.n);
+        if (segment.previousFragile) smallBases.push("прошлый год n=" + segment.previousN);
+
+        let reliabilityText = smallBases.length
+          ? "СИГНАЛ: малая база (" + smallBases.join("; ") + ")"
+          : "достаточно данных";
+
+        if (segment.metrics.enpsMargin !== null) {
+          reliabilityText += ", ДИ текущего eNPS ±" + segment.metrics.enpsMargin;
+        } else {
+          reliabilityText += ", нет валидных ответов eNPS текущего года";
+        }
+
+        if (segment.previousN === 0) {
+          reliabilityText += "; нет базы прошлого года";
+        }
+
         rows.push([
           "",
           segment.name,
           segment.n,
           segment.metrics.enps,
           segment.metrics.enpsMargin,
+          segment.previousN,
           segment.yearDelta ? segment.yearDelta.previous : "",
           segment.yearDelta ? segment.yearDelta.delta : "",
           segment.metrics.detractors,
@@ -294,9 +314,7 @@ const AnalyticsWriter = {
           segment.metrics.leaveRisk,
           segment.badCount,
           deviationText,
-          segment.fragile
-            ? "СИГНАЛ (n<" + Norms.FRAGILE_SEGMENT_SIZE + ", ДИ по eNPS ±" + segment.metrics.enpsMargin + ")"
-            : "достаточно данных"
+          reliabilityText
         ]);
 
       });
@@ -305,17 +323,17 @@ const AnalyticsWriter = {
 
     });
 
-    this.dump_(sheet, header, rows, [120, 300, 50, 70, 60, 90, 70, 80, 95, 80, 110, 520, 200]);
+    this.dump_(sheet, header, rows, [120, 300, 50, 70, 60, 75, 90, 70, 80, 95, 80, 110, 520, 260]);
 
     rows.forEach((row, i) => {
       if (row[1] === "НОРМА КОМПАНИИ") {
         sheet.getRange(i + 2, 1, 1, header.length).setBackground("#ededed").setFontWeight("bold");
-      } else if (row[10] !== "" && row[10] >= 2) {
-        sheet.getRange(i + 2, 11).setBackground("#ffc7ce").setFontWeight("bold");
+      } else if (row[11] !== "" && row[11] >= 2) {
+        sheet.getRange(i + 2, 12).setBackground("#ffc7ce").setFontWeight("bold");
       }
     });
 
-    sheet.getRange(2, 12, rows.length, 1).setWrap(true).setVerticalAlignment("top");
+    sheet.getRange(2, 13, rows.length, 2).setWrap(true).setVerticalAlignment("top");
     sheet.setHiddenGridlines(true);
 
   },

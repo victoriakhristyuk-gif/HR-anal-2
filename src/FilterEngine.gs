@@ -88,6 +88,19 @@ const FilterEngine = {
       return this.matchesOperator(value, filter.operator, filter.value);
     }
 
+    // "Отдел" — единственный вопрос, где сырые названия из разных лет
+    // могут расходиться из-за переименований (см. DepartmentAliases).
+    // Приводим и значение строки, и допустимые значения фильтра к
+    // каноническому названию ДО сравнения — иначе фильтр, заданный в
+    // терминах текущего названия, молча теряет строки года, где отдел
+    // назывался иначе.
+    if (this.normalize(headers[columnIndex]) === this.normalize("Отдел")) {
+      return this.matchesValues(
+        DepartmentAliases.canonicalize(value),
+        (filter.values || []).map(v => DepartmentAliases.canonicalize(v))
+      );
+    }
+
     return this.matchesValues(value, filter.values);
 
   },
@@ -141,7 +154,7 @@ const FilterEngine = {
    * Нормализация строки для регистронезависимого сравнения
    */
   normalize(value) {
-    return String(value).trim().toLowerCase();
+    return String(value).trim().toLowerCase().replace(/\s+/g, " ");
   }
 
 };

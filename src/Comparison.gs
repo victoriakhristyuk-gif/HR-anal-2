@@ -147,7 +147,11 @@ const Comparison = {
 
       return {
         question: d2026.question,
-        items: this.compareDistributionItems(d2026.items, d2025 ? d2025.items : [])
+        items: this.compareDistributionItems(
+          d2026.items,
+          d2025 ? d2025.items : [],
+          d2026.question.title
+        )
       };
 
     });
@@ -167,18 +171,9 @@ const Comparison = {
    * ReportService при подсчете distributions2025 для сравнения годов —
    * сама filteredData2025 (сырые данные, фильтры, eNPS/средние оценки
    * 2025) не трогается, здесь применяется только к копии строк.
-   */
-  DEPARTMENT_NAME_MAP_2025_TO_2026_: {
-    "Отдел сетевого администрирования": "Отдел сетевых технологий",
-    "Отдел локализации": "Отдел локализации и перевода",
-    "Отдел программируемых микрокотроллеров": "Отдел программируемых микроконтроллеров"
-  },
-
-  /**
-   * Копия rows с приведенным к 2026 названию отдела (см.
-   * DEPARTMENT_NAME_MAP_2025_TO_2026_) в столбце "Отдел" — для вызова
-   * Statistics.calculateDistribution по 2025 году. Если столбца "Отдел"
-   * нет в headers — возвращает rows как есть.
+   *
+   * Таблица алиасов вынесена в DepartmentAliases (справочник
+   * оргструктуры) — здесь только применение к строкам одного года.
    */
   remapDepartmentRows_(rows, headers) {
 
@@ -190,21 +185,16 @@ const Comparison = {
       return rows;
     }
 
-    const normalizedMap = {};
-    Object.keys(this.DEPARTMENT_NAME_MAP_2025_TO_2026_).forEach(oldName => {
-      normalizedMap[Statistics.normalize_(oldName)] = this.DEPARTMENT_NAME_MAP_2025_TO_2026_[oldName];
-    });
-
     return rows.map(row => {
 
-      const mappedAnswer = normalizedMap[Statistics.normalize_(row[columnIndex])];
+      const canonicalAnswer = DepartmentAliases.canonicalize(row[columnIndex]);
 
-      if (!mappedAnswer) {
+      if (canonicalAnswer === row[columnIndex]) {
         return row;
       }
 
       const newRow = row.slice();
-      newRow[columnIndex] = mappedAnswer;
+      newRow[columnIndex] = canonicalAnswer;
       return newRow;
 
     });
@@ -225,11 +215,18 @@ const Comparison = {
    * присутствует в результате (со значением count 0 для этого года) —
    * т.к. оба года считаются по одному и тому же вопросу/каталогу
    * вариантов ответа.
+   *
+   * Для вопроса "Отдел" (questionTitle) каждая строка получает
+   * renamedFrom — известные прежние названия этого отдела
+   * (DepartmentAliases), т.е. примечание о переименовании. Для
+   * остальных вопросов — всегда пустой массив.
    */
-  compareDistributionItems(items2026, items2025) {
+  compareDistributionItems(items2026, items2025, questionTitle) {
 
     const total2026 = items2026.reduce((sum, item) => sum + item.count, 0);
     const total2025 = items2025.reduce((sum, item) => sum + item.count, 0);
+
+    const isDepartmentQuestion = Statistics.normalize_(questionTitle) === Statistics.normalize_("Отдел");
 
     const byAnswer2025 = {};
     items2025.forEach(item => { byAnswer2025[item.answer] = item; });
@@ -252,7 +249,8 @@ const Comparison = {
         percent2025: percent2025,
         delta: (percent2026 !== null && percent2025 !== null)
           ? percent2026 - percent2025
-          : null
+          : null,
+        renamedFrom: isDepartmentQuestion ? DepartmentAliases.getAliasesFor(item2026.answer) : []
       };
 
     });

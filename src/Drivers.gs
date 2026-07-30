@@ -171,8 +171,8 @@ const Drivers = {
    */
   promoterDetractorGap(vectors, questions, enpsVector) {
 
-    const isPromoter = enpsVector.map(v => v !== null && v >= 9);
-    const isDetractor = enpsVector.map(v => v !== null && v <= 6);
+    const isPromoter = enpsVector.map(v => Scoring.enpsCategory(v) === "promoters");
+    const isDetractor = enpsVector.map(v => Scoring.enpsCategory(v) === "detractors");
 
     return questions
       .filter(q => q.type !== "enps" && q.type !== "text")

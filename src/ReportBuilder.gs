@@ -40,6 +40,23 @@ const ReportBuilder = {
   // центрирования (см. createReport) — контент начинается с колонки 3.
   CONTENT_COLUMN_OFFSET: 2,
 
+  /**
+   * Единый источник видимых подписей периода.
+   *
+   * currentYear/previousYear задает ReportService. Fallback на source и
+   * 2025 оставлен для совместимости со старыми тестовыми reportData.
+   */
+  getReportPeriods_(reportData) {
+
+    return {
+      currentYear: String(reportData.currentYear || reportData.source),
+      previousYear: reportData.previousYear
+        ? String(reportData.previousYear)
+        : (reportData.comparison ? "2025" : null)
+    };
+
+  },
+
   createReport(reportData, reportName, isCustomName) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -163,6 +180,7 @@ const ReportBuilder = {
   renderPassport_(ctx, reportData) {
 
     const sheet = ctx.sheet;
+    const periods = this.getReportPeriods_(reportData);
 
     const activeFilters = reportData.filters
       .filter(filter => this.hasFilterValue(filter))
@@ -180,8 +198,8 @@ const ReportBuilder = {
     ctx.row += 1;
 
     const sampleText = reportData.comparison
-      ? "Размер выборки: 2026 — n=" + reportData.employees +
-        "; 2025 — n=" + reportData.comparison.employees2025
+      ? "Размер выборки: " + periods.currentYear + " — n=" + reportData.employees +
+        "; " + periods.previousYear + " — n=" + reportData.comparison.employees2025
       : "Размер выборки: n=" + reportData.employees;
 
     const sampleLineCell = sheet.getRange(ctx.row, 1);
@@ -322,6 +340,7 @@ const ReportBuilder = {
   buildEnpsSummaryLine_(reportData) {
 
     const enps = reportData.enps.enps;
+    const previousYear = this.getReportPeriods_(reportData).previousYear;
 
     if (!reportData.comparison) {
       return "eNPS: " + enps;
@@ -330,11 +349,11 @@ const ReportBuilder = {
     const comparisonEnps = reportData.comparison.enps;
 
     if (comparisonEnps.delta === null || comparisonEnps.value2025 === null) {
-      return "eNPS: " + enps + " (нет данных 2025 для сравнения)";
+      return "eNPS: " + enps + " (нет данных " + previousYear + " для сравнения)";
     }
 
     return "eNPS: " + enps + " (" + this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
-      " к 2025: " + comparisonEnps.value2025 + ")";
+      " к " + previousYear + ": " + comparisonEnps.value2025 + ")";
 
   },
 
@@ -502,12 +521,14 @@ const ReportBuilder = {
   buildSliceEnpsYoyText_(reportData) {
 
     const comparisonEnps = reportData.comparison.enps;
+    const previousYear = this.getReportPeriods_(reportData).previousYear;
 
     if (comparisonEnps.delta === null || comparisonEnps.value2025 === null) {
-      return "нет данных 2025 для сравнения по срезу";
+      return "нет данных " + previousYear + " для сравнения по срезу";
     }
 
-    return this.formatSignedDelta_(comparisonEnps.delta, " п.п.") + " к 2025 (" + comparisonEnps.value2025 + ")";
+    return this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
+      " к " + previousYear + " (" + comparisonEnps.value2025 + ")";
 
   },
 
@@ -583,6 +604,7 @@ const ReportBuilder = {
     const sheet = ctx.sheet;
     const enps = reportData.enps;
     const comparisonEnps = reportData.comparison ? reportData.comparison.enps : null;
+    const periods = this.getReportPeriods_(reportData);
     const categories = ["promoters", "neutrals", "detractors"];
 
     const labelRange = sheet.getRange(ctx.row, 1);
@@ -605,7 +627,7 @@ const ReportBuilder = {
 
     if (comparisonEnps && comparisonEnps.value2025 !== null && comparisonEnps.value2025 !== undefined) {
       const value2025Cell = sheet.getRange(ctx.row, 3);
-      value2025Cell.setValue("(2025: " + this.formatSignedInt_(comparisonEnps.value2025) + ")");
+      value2025Cell.setValue("(" + periods.previousYear + ": " + this.formatSignedInt_(comparisonEnps.value2025) + ")");
       Formatter.formatMutedSmall(value2025Cell);
       value2025Cell.setHorizontalAlignment("center");
     }
@@ -624,7 +646,7 @@ const ReportBuilder = {
     }));
 
     this.renderCompactAnswerList_(
-      ctx, items, false,
+      ctx, items, false, periods.currentYear, periods.previousYear,
       category => this.ENPS_CATEGORY_META_[category].emoji + " " + this.ENPS_CATEGORY_META_[category].label,
       null,
       category => this.ENPS_CATEGORY_META_[category].barColor
@@ -645,7 +667,7 @@ const ReportBuilder = {
         })
         .join(" • ");
 
-      sheet.getRange(ctx.row, 1).setValue("2025: " + summary);
+      sheet.getRange(ctx.row, 1).setValue(periods.previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(ctx.row, 1));
       ctx.row += 1;
 
@@ -667,6 +689,7 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
     const hasComparison = !!reportData.comparison;
+    const previousYear = this.getReportPeriods_(reportData).previousYear;
     const rows = this.buildAverageOverviewRows_(reportData);
     const coverageByQuestion = this.buildAverageCoverageInfo_(reportData);
 
@@ -692,7 +715,9 @@ const ReportBuilder = {
         return;
       }
 
-      this.renderAverageScoreGroup_(ctx, groupName, group.icon, groupRows, hasComparison, coverageByQuestion);
+      this.renderAverageScoreGroup_(
+        ctx, groupName, group.icon, groupRows, hasComparison, coverageByQuestion, previousYear
+      );
       ctx.row += 1; // пустая строка-разделитель между разделами
 
     });
@@ -1346,7 +1371,7 @@ const ReportBuilder = {
    * оценка, Δ справа — тот же стиль, что и у "⭐ Средняя оценка" внутри
    * вопроса и у KPI-карточек риск-блока/Да-Нет).
    */
-  renderAverageScoreGroup_(ctx, groupName, icon, groupRows, hasComparison, coverageByQuestion) {
+  renderAverageScoreGroup_(ctx, groupName, icon, groupRows, hasComparison, coverageByQuestion, previousYear) {
 
     const sheet = ctx.sheet;
 
@@ -1356,7 +1381,7 @@ const ReportBuilder = {
     ctx.row += 1;
 
     if (groupRows.length > 1) {
-      this.renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison);
+      this.renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison, previousYear);
     }
 
     let zebraIndex = 0;
@@ -1379,7 +1404,7 @@ const ReportBuilder = {
    * "Средняя оценка раздела" (col1) | значение (+"(2025: ...)" той же
    * ячейкой, см. setKpiValueWithPreviousYear_) (col2) | Δ (col3).
    */
-  renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison) {
+  renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison, previousYear) {
 
     const sheet = ctx.sheet;
     const average = values => +(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2);
@@ -1398,7 +1423,7 @@ const ReportBuilder = {
 
       // "4,52 (2025: 4,49)" одной ячейкой — воспринимается как единый
       // KPI, а не три независимых элемента; Δ — соседней ячейкой справа.
-      this.setKpiValueWithPreviousYear_(valueCell, value2026, value2025);
+      this.setKpiValueWithPreviousYear_(valueCell, value2026, value2025, previousYear);
 
       const deltaCell = sheet.getRange(ctx.row, 3);
       deltaCell.setValue(delta);
@@ -1548,10 +1573,10 @@ const ReportBuilder = {
    * строка обзора, а не отдельный акцентный показатель. Δ остается
    * соседней ячейкой, здесь не участвует.
    */
-  setKpiValueWithPreviousYear_(cell, value2026, value2025) {
+  setKpiValueWithPreviousYear_(cell, value2026, value2025, previousYear) {
 
     const currentText = this.formatRatingValue_(value2026);
-    const previousText = " (2025: " + this.formatRatingValue_(value2025) + ")";
+    const previousText = " (" + previousYear + ": " + this.formatRatingValue_(value2025) + ")";
     const fullText = currentText + previousText;
 
     const richText = SpreadsheetApp.newRichTextValue()
@@ -1656,6 +1681,8 @@ const ReportBuilder = {
    */
   buildDetailLookups_(reportData) {
 
+    const periods = this.getReportPeriods_(reportData);
+
     const byQuestionTitle = list => {
       const map = {};
       list.forEach(entry => { map[entry.question.title] = entry; });
@@ -1676,7 +1703,9 @@ const ReportBuilder = {
       topAnswers: byQuestionTitle(reportData.topAnswers),
       comparisonTopAnswers: reportData.comparison ? byQuestionTitle(reportData.comparison.topAnswers) : {},
       averages: averages,
-      comparisonAverages: comparisonAverages
+      comparisonAverages: comparisonAverages,
+      currentYear: periods.currentYear,
+      previousYear: periods.previousYear
     };
 
   },
@@ -1743,6 +1772,8 @@ const ReportBuilder = {
   renderQuestionBlock_(ctx, question, section, lookups, hasComparison) {
 
     const sheet = ctx.sheet;
+    const currentYear = lookups.currentYear;
+    const previousYear = lookups.previousYear;
 
     const isTopAnswers = question.display === "Топ 5";
 
@@ -1781,7 +1812,9 @@ const ReportBuilder = {
     const blockConfig = this.getRiskBlockConfig_(question) || this.getYesNoBlockConfig_(question);
 
     if (blockConfig) {
-      this.renderAggregatedAnswerBlock_(ctx, blockConfig, items, hasComparison);
+      this.renderAggregatedAnswerBlock_(
+        ctx, blockConfig, items, hasComparison, currentYear, previousYear
+      );
       ctx.row += 1; // разделитель между вопросами
       return;
     }
@@ -1812,13 +1845,15 @@ const ReportBuilder = {
       const displayItems = question.title === "Город" ? this.collapseSmallCities_(items) : items;
       this.renderReferenceAnswerList_(ctx, displayItems, showDelta);
     } else if (Questions.isYesNoScale(question)) {
-      this.renderCompactAnswerList_(ctx, items, hasComparison, answer => this.capitalize_(answer));
+      this.renderCompactAnswerList_(
+        ctx, items, hasComparison, currentYear, previousYear, answer => this.capitalize_(answer)
+      );
     } else if (question.type === "rating5") {
       // В строке "2025:" эмодзи-легенда не дублируется (formatSummaryLabel
       // отдельно от formatLabel) — иначе в мелком справочном тексте она
       // конкурирует за внимание с эмодзи основного (2026) списка.
       this.renderCompactAnswerList_(
-        ctx, items, hasComparison,
+        ctx, items, hasComparison, currentYear, previousYear,
         answer => this.formatRatingAnswerLabel_(answer),
         answer => answer
       );
@@ -1826,9 +1861,9 @@ const ReportBuilder = {
       // Все вопросы MULTIPLE (display "Топ 5") автоматически получают
       // рейтинговое отображение — специализированного рендера под
       // конкретный вопрос нет, см. renderRankedAnswerList_.
-      this.renderRankedAnswerList_(ctx, items, hasComparison);
+      this.renderRankedAnswerList_(ctx, items, hasComparison, previousYear);
     } else {
-      this.renderAnswerTable_(ctx, items, hasComparison, hasPercent);
+      this.renderAnswerTable_(ctx, items, hasComparison, hasPercent, currentYear, previousYear);
     }
 
     ctx.row += 1; // разделитель между вопросами
@@ -1968,7 +2003,7 @@ const ReportBuilder = {
    * агрегированными значениями категорий (не по отдельным вариантам
    * ответа).
    */
-  renderAggregatedAnswerBlock_(ctx, blockConfig, items, hasComparison) {
+  renderAggregatedAnswerBlock_(ctx, blockConfig, items, hasComparison, currentYear, previousYear) {
 
     const sheet = ctx.sheet;
 
@@ -2000,7 +2035,9 @@ const ReportBuilder = {
     // Эмодзи-легенда здесь тоже не используется (в отличие от KPI-строк
     // и строки "2025:") — только эмодзи-легенда KPI-карточки остается
     // визуальным акцентом, детализация оформлена нейтрально.
-    this.renderCompactAnswerList_(ctx, items, false, answer => this.capitalize_(answer));
+    this.renderCompactAnswerList_(
+      ctx, items, false, currentYear, previousYear, answer => this.capitalize_(answer)
+    );
 
     if (hasComparison) {
 
@@ -2013,7 +2050,7 @@ const ReportBuilder = {
         })
         .join(" • ");
 
-      sheet.getRange(ctx.row, 1).setValue("2025: " + summary);
+      sheet.getRange(ctx.row, 1).setValue(previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(ctx.row, 1));
       ctx.row += 1;
 
@@ -2349,25 +2386,25 @@ const ReportBuilder = {
    * общая для распределений и Топ-5, колонки процента/сравнения
    * появляются только если для них есть данные (hasPercent/hasComparison).
    */
-  renderAnswerTable_(ctx, items, hasComparison, hasPercent) {
+  renderAnswerTable_(ctx, items, hasComparison, hasPercent, currentYear, previousYear) {
 
     const sheet = ctx.sheet;
     const headerRow = ctx.row;
 
     sheet.getRange(headerRow, 1).setValue("Ответ");
-    sheet.getRange(headerRow, 2).setValue("2026, кол-во");
+    sheet.getRange(headerRow, 2).setValue(currentYear + ", кол-во");
 
     let width = 2;
 
     if (hasPercent) {
-      sheet.getRange(headerRow, 3).setValue("2026, %");
+      sheet.getRange(headerRow, 3).setValue(currentYear + ", %");
       width = 3;
     }
 
     if (hasComparison) {
-      sheet.getRange(headerRow, 4).setValue("2025, кол-во");
+      sheet.getRange(headerRow, 4).setValue(previousYear + ", кол-во");
       if (hasPercent) {
-        sheet.getRange(headerRow, 5).setValue("2025, %");
+        sheet.getRange(headerRow, 5).setValue(previousYear + ", %");
       }
       sheet.getRange(headerRow, 6).setValue("Δ");
       width = 6;
@@ -2446,7 +2483,10 @@ const ReportBuilder = {
    * formatLabel, но может отличаться (например, без эмодзи-легенды у
    * rating5 — чтобы не спорить за внимание с основным 2026-списком).
    */
-  renderCompactAnswerList_(ctx, items, hasComparison, formatLabel, formatSummaryLabel, resolveBarColor) {
+  renderCompactAnswerList_(
+    ctx, items, hasComparison, currentYear, previousYear,
+    formatLabel, formatSummaryLabel, resolveBarColor
+  ) {
 
     const summaryLabel = formatSummaryLabel || formatLabel;
     const sheet = ctx.sheet;
@@ -2460,7 +2500,7 @@ const ReportBuilder = {
     const headerRow = ctx.row;
 
     sheet.getRange(headerRow, 1).setValue("Ответ");
-    sheet.getRange(headerRow, 2).setValue("2026");
+    sheet.getRange(headerRow, 2).setValue(currentYear);
 
     if (hasComparison) {
       sheet.getRange(headerRow, 4).setValue("Δ (п.п.)");
@@ -2524,7 +2564,7 @@ const ReportBuilder = {
 
       const summaryRow = ctx.row;
 
-      sheet.getRange(summaryRow, 1).setValue("2025: " + summary);
+      sheet.getRange(summaryRow, 1).setValue(previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(summaryRow, 1));
 
       ctx.row += 1;
@@ -2563,7 +2603,7 @@ const ReportBuilder = {
    * используют разные символы намеренно — иначе визуально не отличить,
    * какая стрелка к чему относится (см. formatRankChange_).
    */
-  renderRankedAnswerList_(ctx, items, hasComparison) {
+  renderRankedAnswerList_(ctx, items, hasComparison, previousYear) {
 
     const sheet = ctx.sheet;
 
@@ -2685,7 +2725,7 @@ const ReportBuilder = {
         })
         .join(" • ");
 
-      sheet.getRange(ctx.row, 1).setValue("2025: " + summary);
+      sheet.getRange(ctx.row, 1).setValue(previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(ctx.row, 1));
       ctx.row += 1;
 

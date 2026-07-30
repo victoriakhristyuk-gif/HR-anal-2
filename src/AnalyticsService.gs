@@ -42,11 +42,13 @@ const AnalyticsService = {
     const rows = FilterEngine.applyFilters(survey.data, headers, filters);
 
     let previousRows = [];
+    let previousHeaders = headers;
     let hasPrevious = false;
 
     try {
       const previousSurvey = loadSurveyData(previousYear, true);
-      previousRows = FilterEngine.applyFilters(previousSurvey.data, previousSurvey.headers, filters);
+      previousHeaders = previousSurvey.headers;
+      previousRows = FilterEngine.applyFilters(previousSurvey.data, previousHeaders, filters);
       hasPrevious = true;
     } catch (error) {
       hasPrevious = false;
@@ -62,7 +64,7 @@ const AnalyticsService = {
     questions.forEach(question => {
       vectors[question.title] = Scoring.vector(rows, headers, question);
       if (hasPrevious) {
-        previousVectors[question.title] = Scoring.vector(previousRows, headers, question);
+        previousVectors[question.title] = Scoring.vector(previousRows, previousHeaders, question);
       }
     });
 
@@ -72,7 +74,7 @@ const AnalyticsService = {
     // ---------- 3–6. Светофор по каждому вопросу ----------
 
     const trafficLight = this.trafficLight_(
-      questions, vectors, previousVectors, rows, previousRows, headers, hasPrevious
+      questions, vectors, previousVectors, rows, previousRows, headers, previousHeaders, hasPrevious
     );
 
     // ---------- 5. Когорта ----------
@@ -81,12 +83,12 @@ const AnalyticsService = {
 
     if (hasPrevious) {
 
-      const matched = Cohort.build(rows, previousRows, headers);
+      const matched = Cohort.build(rows, previousRows, headers, previousHeaders);
 
       cohort = {
         info: matched,
-        enps: Cohort.enpsChange(matched, headers, questions),
-        changes: Cohort.changes(matched, headers, questions)
+        enps: Cohort.enpsChange(matched, headers, previousHeaders, questions),
+        changes: Cohort.changes(matched, headers, previousHeaders, questions)
       };
 
     }
@@ -116,14 +118,15 @@ const AnalyticsService = {
       rows, headers, questions, dimension.title,
       {
         normalizer: dimension.normalizer,
-        previousRows: hasPrevious ? previousRows : null
+        previousRows: hasPrevious ? previousRows : null,
+        previousHeaders: previousHeaders
       }
     ));
 
     const composition = hasPrevious
       ? dimensions.map(dimension => ({
           dimension: dimension.title,
-          shifts: Segments.compositionShift(rows, previousRows, headers, dimension.title, dimension.normalizer)
+          shifts: Segments.compositionShift(rows, previousRows, headers, previousHeaders, dimension.title, dimension.normalizer)
             .filter(shift => shift.material)
         })).filter(entry => entry.shifts.length)
       : [];
@@ -160,7 +163,7 @@ const AnalyticsService = {
    *   eNPS     → пункты.
    * Сравнивать их между собой можно только через normalizeLevel.
    */
-  trafficLight_(questions, vectors, previousVectors, rows, previousRows, headers, hasPrevious) {
+  trafficLight_(questions, vectors, previousVectors, rows, previousRows, headers, previousHeaders, hasPrevious) {
 
     const enpsQuestion = questions.find(q => q.type === "enps");
     const enpsVector = enpsQuestion ? vectors[enpsQuestion.title] : [];
@@ -196,8 +199,8 @@ const AnalyticsService = {
 
         const valid = vector.filter(v => v !== null);
         const ci = MathStats.enpsConfidence(
-          valid.filter(v => v >= 9).length,
-          valid.filter(v => v <= 6).length,
+          valid.filter(v => Scoring.enpsCategory(v) === "promoters").length,
+          valid.filter(v => Scoring.enpsCategory(v) === "detractors").length,
           valid.length
         );
 
@@ -209,8 +212,8 @@ const AnalyticsService = {
 
           const previousValid = previousVector.filter(v => v !== null);
           const previousCi = MathStats.enpsConfidence(
-            previousValid.filter(v => v >= 9).length,
-            previousValid.filter(v => v <= 6).length,
+            previousValid.filter(v => Scoring.enpsCategory(v) === "promoters").length,
+            previousValid.filter(v => Scoring.enpsCategory(v) === "detractors").length,
             previousValid.length
           );
 
@@ -317,7 +320,7 @@ const AnalyticsService = {
 
       if (hasPrevious && coverage.coveredPercent !== null) {
 
-        const previousCoverage = Scoring.coverage(previousRows, headers, question);
+        const previousCoverage = Scoring.coverage(previousRows, previousHeaders, question);
 
         if (previousCoverage.coveredPercent !== null) {
           entry.coverageDelta = MathStats.round(

@@ -10,6 +10,24 @@
 // полноту данных сводной. Порядок — от свежего года к старому.
 const REPORT_YEARS = ['2026', '2025'];
 
+/**
+ * Строки для расчета одного распределения в основном отчете.
+ *
+ * В самостоятельном отчете за 2025 старые названия отделов должны
+ * попадать в актуальные категории Questions.catalogue. Для этого
+ * канонизируется только копия строк, используемая распределением
+ * "Отдел"; исходные строки отчета и остальные вопросы не меняются.
+ */
+function getReportDistributionRows_(source, question, rows, headers) {
+
+  const isDepartment = Statistics.normalize_(question.title) === Statistics.normalize_("Отдел");
+
+  return source === '2025' && isDepartment
+    ? Comparison.remapDepartmentRows_(rows, headers)
+    : rows;
+
+}
+
 function buildReport(source, filters, compareWith2025, customReportName) {
 
   // ==========================================================
@@ -45,7 +63,7 @@ function buildReport(source, filters, compareWith2025, customReportName) {
   const distributions = Questions.getDistributionQuestions().map(question => ({
     question: question,
     items: Statistics.calculateDistribution(
-      filteredData,
+      getReportDistributionRows_(source, question, filteredData, survey.headers),
       survey.headers,
       question
     )
@@ -161,17 +179,10 @@ function buildReport(source, filters, compareWith2025, customReportName) {
 
     const filteredData2025 = sample2025.rows;
 
-    // "Отдел" — единственный вопрос, где несколько значений 2025 года
-    // нужно привести к названию 2026 (переименования/опечатка, см.
-    // Comparison.DEPARTMENT_NAME_MAP_2025_TO_2026_) до расчета
-    // распределения, иначе Statistics.calculateDistribution молча
-    // отбросит старое название как не входящее в каталог 2026 года.
-    const departmentRows2025 = Comparison.remapDepartmentRows_(filteredData2025, sample2025.headers);
-
     const distributions2025 = Questions.getDistributionQuestions().map(question => ({
       question: question,
       items: Statistics.calculateDistribution(
-        question.title === "Отдел" ? departmentRows2025 : filteredData2025,
+        getReportDistributionRows_('2025', question, filteredData2025, sample2025.headers),
         sample2025.headers,
         question
       )
@@ -235,6 +246,11 @@ function buildReport(source, filters, compareWith2025, customReportName) {
     employees: filteredData.length,
     filters: filters,
     source: source,
+    // Явные периоды для пользовательских подписей отчета. Внутренние
+    // поля Comparison пока сохраняют исторические имена value2026/
+    // value2025, но видимый год больше не выводится из этих имен.
+    currentYear: source,
+    previousYear: comparisonEnabled ? '2025' : null,
     enps: enps,
     // Размер выборки и eNPS по каждому году отдельно — нужны сводной
     // аналитике, которая должна быть одинаково полной при любом
