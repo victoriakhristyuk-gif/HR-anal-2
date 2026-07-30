@@ -73,8 +73,9 @@ const FilterEngine = {
 
     // Сравнение без учета регистра/пробелов — те же расхождения
     // заголовков, что уже встречались в Statistics.calculateDistribution.
+    const columnKey = filter.dataTitle || filter.question;
     const columnIndex = headers.findIndex(
-      header => this.normalize(header) === this.normalize(filter.question)
+      header => this.normalize(header) === this.normalize(columnKey)
     );
 
     if (columnIndex === -1) {

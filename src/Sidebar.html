@@ -1155,6 +1155,7 @@
 
           activeFilters.push({
             question: question.question,
+            dataTitle: question.dataTitle,
             type: question.type,
             operator: operator,
             value: Number(rawValue)
@@ -1173,6 +1174,7 @@
 
           activeFilters.push({
             question: question.question,
+            dataTitle: question.dataTitle,
             type: question.type,
             values: values,
             mode: document.querySelector('.filterMode:checked').value

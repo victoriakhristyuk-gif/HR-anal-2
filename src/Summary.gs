@@ -112,7 +112,7 @@ const Summary = {
     { block: "Средние оценки", title: "Курсы английского", kind: "average", question: "Курсы английского" },
     { block: "Средние оценки", title: "ДМС", kind: "average", question: "ДМС" },
     { block: "Средние оценки", title: "Мерч за достижения", kind: "average", question: "Мерч за достижения" },
-    { block: "Средние оценки", title: "Задачи 2", kind: "average", question: "Задачи 2" },
+    { block: "Средние оценки", title: "Удовл. раб. задачами", kind: "average", question: "Удовлетворенность рабочими задачами" },
     { block: "Средние оценки", title: "ЗП", kind: "average", question: "ЗП" }
 
   ],
@@ -166,6 +166,63 @@ const Summary = {
     // лист до этого места, старая ссылка строки на мгновение "протухает",
     // и строку удалило бы саму себя вместо простого обновления на месте.
     this.pruneDeletedSamples_(summarySheet);
+
+  },
+
+  /**
+   * Обновить текст гиперссылок в столбце "Выборка", если лист отчета
+   * был переименован вручную. Ссылка (gid) остается рабочей, но
+   * отображаемое название устаревает — здесь оно подтягивается из
+   * текущего sheet.getName().
+   */
+  syncSampleNames(ss) {
+
+    const sheet = this.findSheetByMetadata_(ss);
+
+    if (!sheet) {
+      return;
+    }
+
+    const lastRow = sheet.getLastRow();
+
+    if (lastRow < this.FIRST_DATA_ROW) {
+      return;
+    }
+
+    const sampleColumn = this.KEY_COLUMN + 1;
+    const rowCount = lastRow - this.FIRST_DATA_ROW + 1;
+
+    const formulas = sheet
+      .getRange(this.FIRST_DATA_ROW, sampleColumn, rowCount, 1)
+      .getFormulas();
+
+    const displayed = sheet
+      .getRange(this.FIRST_DATA_ROW, sampleColumn, rowCount, 1)
+      .getDisplayValues();
+
+    const sheetsById = {};
+    ss.getSheets().forEach(function (s) { sheetsById[String(s.getSheetId())] = s; });
+
+    for (var i = 0; i < rowCount; i++) {
+
+      var gid = this.extractGid_(formulas[i][0]);
+
+      if (gid === null) {
+        continue;
+      }
+
+      var target = sheetsById[gid];
+
+      if (!target) {
+        continue;
+      }
+
+      if (displayed[i][0] !== target.getName()) {
+        sheet.getRange(this.FIRST_DATA_ROW + i, sampleColumn)
+          .setFormula(this.buildSampleLink_(target));
+      }
+
+    }
 
   },
 

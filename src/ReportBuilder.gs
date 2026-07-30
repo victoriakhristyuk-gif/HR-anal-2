@@ -36,6 +36,10 @@ const ReportBuilder = {
   // Позволяет находить "тот же" отчет независимо от его названия.
   REPORT_KEY_METADATA_KEY: "hranalytics_report_key",
 
+  // Два столбца-отступа, вставленные в начало листа для визуального
+  // центрирования (см. createReport) — контент начинается с колонки 3.
+  CONTENT_COLUMN_OFFSET: 2,
+
   createReport(reportData, reportName, isCustomName) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -120,7 +124,8 @@ const ReportBuilder = {
    * самостоятельно, чтобы не дублировать логику именования и не
    * рисковать расхождением с реальным именем листа (в т.ч. с
    * уникализирующим суффиксом "_2" и т.п., см. getUniqueSheetName, и с
-   * пользовательским названием отчета).
+   * пользовательским названием отчета). При ручном переименовании
+   * листа заголовок обновляется автоматически (см. syncHeader).
    */
   renderHeader_(ctx) {
 
@@ -131,6 +136,24 @@ const ReportBuilder = {
     Formatter.formatReportMainTitle(sheet, range);
 
     ctx.row += 1;
+
+  },
+
+  /**
+   * Обновить заголовок листа-отчета, если он разошелся с текущим
+   * названием листа (пользователь переименовал лист вручную).
+   * Ячейка уже отформатирована (mergeAcross, шрифт, цвет) — setValue
+   * меняет только текст, форматирование сохраняется.
+   */
+  syncHeader(sheet) {
+
+    const cell = sheet.getRange(1, 1 + this.CONTENT_COLUMN_OFFSET);
+    const current = String(cell.getValue());
+    const name = sheet.getName();
+
+    if (current !== name) {
+      cell.setValue(name);
+    }
 
   },
 
@@ -719,7 +742,7 @@ const ReportBuilder = {
    * не получает вторую строку (см. buildAverageCoverageInfo_) — сюда
    * попадают только rating5-вопросы из AVERAGE_SCORE_GROUPS_, у которых
    * в каталоге (Questions.gs) реально есть ответ "не пользовался"
-   * ("Задачи 2"/"ЗП" его не имеют и поэтому не перечислены).
+   * ("Удовлетворенность рабочими задачами"/"ЗП" его не имеют и поэтому не перечислены).
    *
    * Значение — объект (не голая строка), т.к. это по сути мини-конфигурация
    * на вопрос, а не просто словарь подписей: например, buildAverageCoverageInfo_

@@ -24,6 +24,7 @@ function getFilterableQuestions(source) {
 
     return {
       question: question.title,
+      dataTitle: question.dataTitle || null,
       type: question.type,
       operators: isOperatorType ? Filters.operators : null,
       options: isOperatorType ? null : Filters.getValueOptions(question, survey.headers, survey.data)
@@ -40,5 +41,6 @@ function getFilterableQuestions(source) {
  * раньше, строится ровно один отчет.
  */
 function buildReportFromSidebar(source, filters, compareWith2025, customReportName) {
+  ensureChangeTrigger_();
   return BatchReports.run(source, filters, compareWith2025, customReportName);
 }

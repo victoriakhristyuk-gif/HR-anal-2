@@ -62,19 +62,18 @@ const Statistics = {
    */
   calculateAverageRatings(rows, headers) {
 
-    const questions = Questions
-      .getAverageQuestions()
-      .map(q => q.title);
-
+    const questions = Questions.getAverageQuestions();
     const result = [];
 
     questions.forEach(question => {
 
-      // Сравнение без учета регистра/пробелов — см. calculateDistribution.
-      const column = headers.findIndex(header => this.normalize_(header) === this.normalize_(question));
+      const columnTitle = question.dataTitle || question.title;
+      const column = headers.findIndex(header => this.normalize_(header) === this.normalize_(columnTitle));
 
       if (column === -1) return;
 
+      const min = Scoring.minFor(question);
+      const max = Scoring.maxFor(question);
       let sum = 0;
       let count = 0;
 
@@ -82,10 +81,6 @@ const Statistics = {
 
         const raw = row[column];
 
-        // Пустой ответ нужно исключить ДО Number(): Number("") === 0,
-        // поэтому без этой проверки пропущенный вопрос молча считался
-        // бы оценкой "0" и занижал среднее (тот же случай пропусков,
-        // что уже обрабатывается в calculateDistribution).
         if (raw === "" || raw === null || raw === undefined) {
           return;
         }
@@ -94,13 +89,18 @@ const Statistics = {
 
         if (isNaN(value)) return;
 
+        if (value < min || value > max) {
+          console.warn("Statistics: значение " + value + " вне шкалы [" + min + "–" + max + "] для «" + question.title + "», пропущено");
+          return;
+        }
+
         sum += value;
         count++;
 
       });
 
       result.push({
-        question: question,
+        question: question.title,
         average: count ? +(sum / count).toFixed(2) : 0,
         count: count
       });
@@ -122,7 +122,7 @@ const Statistics = {
     // Questions.gs (например, "о жизни компании" вместо "О жизни
     // компании"), из-за которых indexOf() не находил столбец.
     const columnIndex = headers.findIndex(
-      header => this.normalize_(header) === this.normalize_(question.title)
+      header => this.normalize_(header) === this.normalize_(question.dataTitle || question.title)
     );
 
     if (columnIndex === -1) {
@@ -146,6 +146,7 @@ const Statistics = {
       const index = normalizedOrder.indexOf(this.normalize_(raw));
 
       if (index === -1) {
+        console.warn("Statistics: ответ «" + raw + "» не входит в шкалу для «" + (question.dataTitle || question.title) + "», пропущен");
         return;
       }
 
@@ -205,7 +206,7 @@ const Statistics = {
 
     // Сравнение без учета регистра/пробелов — см. calculateDistribution.
     const columnIndex = headers.findIndex(
-      header => this.normalize_(header) === this.normalize_(question.title)
+      header => this.normalize_(header) === this.normalize_(question.dataTitle || question.title)
     );
 
     if (columnIndex === -1) {

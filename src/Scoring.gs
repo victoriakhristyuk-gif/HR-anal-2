@@ -126,7 +126,7 @@ const Scoring = {
    */
   vector(rows, headers, question) {
 
-    const columnIndex = this.columnIndex_(headers, question.title);
+    const columnIndex = this.columnIndex_(headers, question.dataTitle || question.title);
 
     if (columnIndex === -1) {
       return rows.map(() => null);
@@ -134,7 +134,21 @@ const Scoring = {
 
     const map = this.mapFor(question);
 
-    return rows.map(row => this.score_(row[columnIndex], map));
+    if (map) {
+      return rows.map(row => this.score_(row[columnIndex], map));
+    }
+
+    const min = this.minFor(question);
+    const max = this.maxFor(question);
+
+    return rows.map(row => {
+      const score = this.score_(row[columnIndex], null);
+      if (score !== null && (score < min || score > max)) {
+        console.warn("Scoring: значение " + score + " вне шкалы [" + min + "–" + max + "] для «" + question.title + "», пропущено");
+        return null;
+      }
+      return score;
+    });
 
   },
 
@@ -176,7 +190,7 @@ const Scoring = {
    */
   coverage(rows, headers, question) {
 
-    const columnIndex = this.columnIndex_(headers, question.title);
+    const columnIndex = this.columnIndex_(headers, question.dataTitle || question.title);
 
     if (columnIndex === -1) {
       return { covered: 0, notCovered: 0, empty: rows.length, total: rows.length, coveredPercent: null };
@@ -230,7 +244,7 @@ const Scoring = {
    */
   uncertainMask(rows, headers, question) {
 
-    const columnIndex = this.columnIndex_(headers, question.title);
+    const columnIndex = this.columnIndex_(headers, question.dataTitle || question.title);
 
     if (columnIndex === -1) {
       return rows.map(() => false);
