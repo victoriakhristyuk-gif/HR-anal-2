@@ -117,6 +117,7 @@ const ReportBuilder = {
     this.renderKeyIndicators_(ctx, reportData);
     this.renderDetailedAnalyticsBefore_(ctx, reportData);
     this.renderAverageOverviewSection_(ctx, reportData);
+    this.renderCohortRoster_(ctx, reportData);
     this.renderRawData_(ctx, reportData);
 
     Formatter.freezeHeader(sheet, frozenRows, 0);
@@ -207,6 +208,29 @@ const ReportBuilder = {
     sampleLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
 
+    if (reportData.cohortOnly) {
+
+      const cohortLineCell = sheet.getRange(ctx.row, 1);
+      cohortLineCell.setValue("Выборка: сквозная когорта");
+      cohortLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
+      ctx.row += 1;
+
+      // Когорту меньше 30 человек не блокируем — статистика по ней
+      // (в т.ч. парные тесты Cohort.changes) все равно посчитана и
+      // показана, но выводы по ней ненадежны, и это должно быть видно
+      // сразу в паспорте, а не только в тексте Executive Summary.
+      if (reportData.cohortInfo && reportData.cohortInfo.size < 30) {
+        const warningRange = sheet.getRange(ctx.row, 1, 1, 6);
+        warningRange.setValue(
+          "⚠ Когорта меньше 30 человек (n=" + reportData.cohortInfo.size +
+          ") — статистические выводы по ней ненадежны."
+        );
+        Formatter.formatWarningBanner(warningRange);
+        ctx.row += 1;
+      }
+
+    }
+
     ctx.row += 1; // пустая строка-разделитель
 
   },
@@ -257,13 +281,51 @@ const ReportBuilder = {
 
     // 4. Драматичные изменения по всем блокам анкеты (Модуль 2) —
     // пропускается, если список пуст (нет пары за прошлый год, либо
-    // изменений выше порога не нашлось).
+    // изменений выше порога не нашлось). Отбор по-прежнему делается по
+    // порогу "заметности" (визуальная эвристика, не тест), но теперь
+    // каждая отобранная запись несет свой честный significant
+    // (zTestProportions/welchTest, см. buildDramaticChangesInput_/
+    // Comparison.gs) — эвристика решает, что ПОКАЗАТЬ, тест решает,
+    // МОЖНО ЛИ ДОВЕРЯТЬ конкретной строке (см. formatDramaticChangesList_).
     const dramaticChangesInput = this.buildDramaticChangesInput_(reportData);
-    const dramaticChanges = this.selectDramaticChanges_(dramaticChangesInput);
+    const dramaticChanges = this.selectDramaticChanges_(dramaticChangesInput).slice(0, 3);
+    const hasUnconfirmedDramaticChange = dramaticChanges.some(change => change.significant === false);
 
     if (dramaticChanges.length > 0) {
+
+      // Дисклеймер — сразу под заголовком блока, ДО списка (см. задачу):
+      // читатель должен узнать, что часть строк ниже помечена звездочкой
+      // как неподтвержденная, прежде чем прочитает сам список, а не после.
+      if (hasUnconfirmedDramaticChange) {
+        const legendCell = sheet.getRange(ctx.row, 1);
+        legendCell.setValue(
+          "Заметные изменения (порог заметности, не тест на значимость; * — изменение " +
+          "статистически не подтверждено, возможен шум выборки):"
+        );
+        legendCell.setFontStyle("italic").setFontColor(Formatter.MUTED_TEXT_COLOR);
+        Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+        ctx.row += 1;
+      }
+
       const dramaticChangesCell = sheet.getRange(ctx.row, 1);
-      dramaticChangesCell.setValue("Заметные изменения: " + this.formatDramaticChangesList_(dramaticChanges.slice(0, 3)));
+      dramaticChangesCell.setValue(
+        (hasUnconfirmedDramaticChange ? "" : "Заметные изменения: ") +
+        this.formatDramaticChangesList_(dramaticChanges)
+      );
+      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      ctx.row += 1;
+    }
+
+    // Оговорка про порог "заметности" для eNPS-сдвига (interpretEnpsShift_,
+    // тот же визуальный порог DRAMATIC_CHANGE_THRESHOLD_PERCENT_, но без
+    // собственного z-теста на уровне текста) — независима от блока выше.
+    if (enpsShift) {
+      const disclaimerCell = sheet.getRange(ctx.row, 1);
+      disclaimerCell.setValue(
+        "Сдвиг категорий eNPS выше отобран по порогу заметности (визуальная эвристика), а не по " +
+        "статистической проверке значимости — на небольшой выборке такая дельта может быть случайным колебанием."
+      );
+      disclaimerCell.setFontStyle("italic").setFontColor(Formatter.MUTED_TEXT_COLOR);
       Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
       ctx.row += 1;
     }
@@ -307,6 +369,12 @@ const ReportBuilder = {
    * "questionTitle Δ" для rating-изменений, "questionTitle — answerLabel Δ"
    * для percent-изменений из selectDramaticChanges_ — тот же формат
    * дельты (стрелка+знак), что и у остальных строк Executive Summary.
+   *
+   * change.significant === false (zTestProportions/welchTest, см.
+   * buildDramaticChangesInput_) добавляет "*" — эта конкретная строка
+   * прошла визуальный порог "заметности", но не тест на значимость,
+   * т.е. с достаточной вероятностью это шум выборки, а не тренд
+   * (см. HR-002 и легенду в renderExecutiveSummary_).
    */
   formatDramaticChangesList_(changes) {
 
@@ -318,8 +386,9 @@ const ReportBuilder = {
           : change.questionTitle + " — " + change.answerLabel;
 
         const suffix = change.kind === "rating" ? "" : " п.п.";
+        const marker = change.significant === false ? "*" : "";
 
-        return label + " " + this.formatSignedDelta_(change.delta, suffix);
+        return label + " " + this.formatSignedDelta_(change.delta, suffix) + marker;
 
       })
       .join("   ");
@@ -353,7 +422,27 @@ const ReportBuilder = {
     }
 
     return "eNPS: " + enps + " (" + this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
-      " к " + previousYear + ": " + comparisonEnps.value2025 + ")";
+      " к " + previousYear + ": " + comparisonEnps.value2025 + ")" +
+      this.formatEnpsSignificanceSuffix_(comparisonEnps);
+
+  },
+
+  /**
+   * " — в пределах погрешности (ДИ ±N), тренда нет" после дельты eNPS,
+   * когда доверительные интервалы двух лет перекрываются
+   * (comparisonEnps.significant === false). Пусто, если значимо
+   * (significant === true) или непроверяемо (значение по одному из
+   * годов недостаточно для расчета ДИ, significant === null) — в
+   * последнем случае дельта уже сама по себе не подставляется нулем
+   * (см. compareENPS), молчаливой ложной уверенности здесь нет.
+   */
+  formatEnpsSignificanceSuffix_(comparisonEnps) {
+
+    if (comparisonEnps.significant !== false) return "";
+
+    const margin = Math.max(comparisonEnps.margin2026 || 0, comparisonEnps.margin2025 || 0);
+
+    return " — в пределах погрешности (ДИ ±" + margin + " п.п.), тренда нет";
 
   },
 
@@ -528,7 +617,8 @@ const ReportBuilder = {
     }
 
     return this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
-      " к " + previousYear + " (" + comparisonEnps.value2025 + ")";
+      " к " + previousYear + " (" + comparisonEnps.value2025 + ")" +
+      this.formatEnpsSignificanceSuffix_(comparisonEnps);
 
   },
 
@@ -622,7 +712,11 @@ const ReportBuilder = {
       deltaCell.setValue(comparisonEnps.delta);
       deltaCell.setFontSize(11).setFontWeight("bold").setHorizontalAlignment("center");
       Formatter.applyCompactDeltaNumberFormat(deltaCell);
-      Formatter.setDeltaFontColor(deltaCell, comparisonEnps.delta, "up");
+      // HR-002: значимость динамики (перекрытие ДИ, см. compareENPS) —
+      // не подтвержденная разница красится нейтрально-серым (та же
+      // логика, что и Δ=0), а не зеленым/красным как настоящий тренд.
+      Formatter.setDeltaFontColor(deltaCell, comparisonEnps.delta,
+        comparisonEnps.significant === false ? "neutral" : "up");
     }
 
     if (comparisonEnps && comparisonEnps.value2025 !== null && comparisonEnps.value2025 !== undefined) {
@@ -633,6 +727,14 @@ const ReportBuilder = {
     }
 
     ctx.row += 1;
+
+    if (comparisonEnps && comparisonEnps.significant === false) {
+      const noteRange = sheet.getRange(ctx.row, 1, 1, 3);
+      noteRange.setValue("В пределах погрешности (ДИ ±" +
+        Math.max(comparisonEnps.margin2026 || 0, comparisonEnps.margin2025 || 0) + " п.п.) — тренда нет");
+      Formatter.formatMutedSmall(noteRange);
+      ctx.row += 1;
+    }
 
     const comparisonByCategory = {};
     if (comparisonEnps) {
@@ -990,9 +1092,18 @@ const ReportBuilder = {
       const percent2026 = total2026 > 0 ? Math.round(item.count2026 / total2026 * 100) : null;
       const percent2025 = total2025 > 0 ? Math.round(item.count2025 / total2025 * 100) : null;
 
+      // zTestProportions (HR-002) — знаменатель здесь свой (без
+      // неответа), поэтому significant из Comparison.compareDistributionItems
+      // (посчитанный на исходном знаменателе) сюда не годится и
+      // пересчитывается заново на тех же total2026/total2025.
+      const significant = (percent2026 !== null && percent2025 !== null)
+        ? MathStats.zTestProportions(item.count2026, total2026, item.count2025, total2025).significant
+        : null;
+
       return {
         answer: item.answer,
-        delta: (percent2026 !== null && percent2025 !== null) ? percent2026 - percent2025 : null
+        delta: (percent2026 !== null && percent2025 !== null) ? percent2026 - percent2025 : null,
+        significant: significant
       };
 
     });
@@ -1080,7 +1191,8 @@ const ReportBuilder = {
         answerLabel: null,
         delta: item.delta,
         kind: "rating",
-        direction: item.delta > 0 ? "up" : "down"
+        direction: item.delta > 0 ? "up" : "down",
+        significant: item.significant
       });
 
     });
@@ -1126,12 +1238,24 @@ const ReportBuilder = {
           return;
         }
 
+        // zTestProportions (HR-002) — знаменатель тот же, что у
+        // percent2026/percent2025 бакета: все ответившие на вопрос
+        // (Да/Нет-шкала без отдельного варианта "неответ").
+        const bucketTotal2026 = entry.items.reduce((sum, item) => sum + item.count2026, 0);
+        const bucketTotal2025 = entry.items.reduce((sum, item) => sum + (item.count2025 || 0), 0);
+        const bucketSignificant = (bucketTotal2026 > 0 && bucketTotal2025 > 0)
+          ? MathStats.zTestProportions(
+              growingBucket.count2026, bucketTotal2026, growingBucket.count2025, bucketTotal2025
+            ).significant
+          : null;
+
         changes.push({
           questionTitle: entry.question.title,
           answerLabel: this.stripBucketLabelEmoji_(growingBucket.label),
           delta: growingBucket.delta,
           kind: "percent",
-          direction: "up"
+          direction: "up",
+          significant: bucketSignificant
         });
 
         return;
@@ -1149,7 +1273,8 @@ const ReportBuilder = {
           answerLabel: item.answer,
           delta: item.delta,
           kind: "percent",
-          direction: item.delta > 0 ? "up" : "down"
+          direction: item.delta > 0 ? "up" : "down",
+          significant: item.significant
         });
 
       });
@@ -1167,7 +1292,8 @@ const ReportBuilder = {
         answerLabel: this.ENPS_CATEGORY_LABELS_[category.category],
         delta: category.delta,
         kind: "percent",
-        direction: category.delta > 0 ? "up" : "down"
+        direction: category.delta > 0 ? "up" : "down",
+        significant: category.significant
       });
 
     });
@@ -1940,7 +2066,7 @@ const ReportBuilder = {
    */
   YES_NO_SUMMARIES_: {
 
-    "График": { positive: "Устраивает", negative: "Не устраивает" },
+    "Work-life balance": { positive: "Устраивает", negative: "Не устраивает" },
     "Задачи": { positive: "Устраивают", negative: "Не устраивают" },
     "Ожидания": { positive: "Ожидания понятны", negative: "Ожидания непонятны" },
     "Проф мнение": { positive: "Мнение учитывается", negative: "Мнение не учитывается" },
@@ -2079,7 +2205,7 @@ const ReportBuilder = {
       return (total !== null && value !== null && value !== undefined) ? total + value : null;
     }, 0);
 
-    return buckets.map(bucket => {
+    const result = buckets.map(bucket => {
 
       const matched = bucket.answers
         .map(answer => byAnswer[answer.trim().toLowerCase()])
@@ -2096,6 +2222,47 @@ const ReportBuilder = {
       };
 
     });
+
+    // HR-002: знаменатель риск-метрик. Как посчитан items[].percent —
+    // это доля от ВСЕХ ответивших на вопрос, включая "неответ"
+    // ("затрудняюсь ответить" и т.п. — bucket с direction "neutral",
+    // например "⚪ Затруднились" у "Выгорание"). Но задокументированное
+    // решение проекта (Norms.RISK_DENOMINATOR = "answered", см. Norms.gs)
+    // — риск-метрика должна отвечать на вопрос "какая доля тех, кто
+    // ВЫБРАЛ точку шкалы", а не всех опрошенных, и именно так ее уже
+    // считает "Расширенная аналитика" (AnalyticsService/Scoring). Без
+    // этого пересчета один и тот же показатель "Выгорание" давал разные
+    // проценты в основном отчете и в расширенной аналитике (16,5% vs
+    // 17,8% на данных 2026 года) — одна и та же карточка молчаливо врала
+    // при сверке двух листов одной книги. Сам неответ (bucket.direction
+    // === "neutral") остается посчитанным от ВСЕХ — это отдельный,
+    // осмысленный сам по себе вопрос ("какая доля вообще не смогла
+    // оценить"), а не часть риск-метрики, поэтому его не трогаем.
+    const neutralBucket = result.find(bucket => bucket.direction === "neutral");
+
+    if (neutralBucket) {
+
+      const total2026 = items.reduce((sum, item) => sum + item.count2026, 0);
+      const total2025 = items.reduce((sum, item) => sum + (item.count2025 || 0), 0);
+
+      const answered2026 = total2026 - neutralBucket.count2026;
+      const answered2025 = total2025 - neutralBucket.count2025;
+
+      result.forEach(bucket => {
+
+        if (bucket.direction === "neutral") return;
+
+        bucket.percent2026 = answered2026 > 0 ? Math.round(bucket.count2026 / answered2026 * 100) : null;
+        bucket.percent2025 = answered2025 > 0 ? Math.round(bucket.count2025 / answered2025 * 100) : null;
+        bucket.delta = (bucket.percent2026 !== null && bucket.percent2025 !== null)
+          ? bucket.percent2026 - bucket.percent2025
+          : null;
+
+      });
+
+    }
+
+    return result;
 
   },
 
@@ -2517,7 +2684,12 @@ const ReportBuilder = {
       const percent2026 = item.percent2026 !== null && item.percent2026 !== undefined ? item.percent2026 : null;
       const rowRange = sheet.getRange(row, 1, 1, width);
 
-      sheet.getRange(row, 1).setValue(formatLabel(item.answer));
+      const labelCell = sheet.getRange(row, 1);
+      labelCell.setValue(formatLabel(item.answer));
+
+      if (item.renamedFrom && item.renamedFrom.length) {
+        Formatter.note(labelCell, "Ранее называлось: " + item.renamedFrom.join(", "));
+      }
 
       const countCell = sheet.getRange(row, 2);
       countCell.setValue(
@@ -2770,6 +2942,63 @@ const ReportBuilder = {
    * визуально отделены толстой границей сверху и свернуты по
    * умолчанию. Содержимое (заголовки/строки) не меняется.
    */
+  /**
+   * "Состав сквозной когорты" — ФИО участников, только для когортных
+   * отчетов (reportData.cohortOnly). Персональные данные, поэтому раздел
+   * идет отдельно от остальной статистики, сворачивается по умолчанию
+   * и не попадает никуда за пределы этого листа (не в Sidebar, не в
+   * сводную аналитику, не в сигнатуру отчета — см. getReportKey_).
+   *
+   * Состав ограничен reportData.cohortRoster — тем, что уже вернул
+   * Cohort.roster для строк matched.now/matched.before, то есть без
+   * дублей и неподписанных анкет (они не входят в когорту).
+   */
+  renderCohortRoster_(ctx, reportData) {
+
+    if (!reportData.cohortOnly) return;
+
+    const sheet = ctx.sheet;
+    const sectionStartRow = ctx.row;
+    const roster = reportData.cohortRoster || [];
+
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue(
+      "👥 Состав сквозной когорты (" + roster.length + " " +
+      this.pluralizeRu_(roster.length, ["человек", "человека", "человек"]) + ")"
+    );
+    Formatter.formatSectionTitle(sheet, titleRange);
+    ctx.row += 1;
+
+    const headerRow = ctx.row;
+    const headers = ["ФИО", "ФИО в 2025", "Статус сопоставления"];
+
+    sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+    Formatter.formatRawDataHeader(sheet, sheet.getRange(headerRow, 1, 1, headers.length));
+    ctx.row += 1;
+
+    if (roster.length > 0) {
+
+      const values = roster.map(entry => [
+        entry.nameNow,
+        entry.nameBefore || "",
+        entry.status
+      ]);
+
+      sheet.getRange(ctx.row, 1, values.length, headers.length).setValues(values);
+      ctx.row += values.length;
+
+    }
+
+    const sectionContentRows = ctx.row - 1 - sectionStartRow;
+
+    // Свернуто по умолчанию — это персональные данные, а не показатель
+    // отчета, который должен быть виден сразу при открытии листа.
+    if (sectionContentRows > 0) {
+      Formatter.groupRows(sheet, sectionStartRow + 1, sectionContentRows, true);
+    }
+
+  },
+
   renderRawData_(ctx, reportData) {
 
     const sheet = ctx.sheet;
@@ -2838,6 +3067,26 @@ const ReportBuilder = {
   },
 
   /**
+   * Название когортного отчета — та же схема, что и generateReportName,
+   * но с префиксом "Когорта", а не "Все сотрудники": имя "Когорта" без
+   * дополнения занято листом расширенной аналитики (Cohort.gs), а без
+   * фильтров когортный отчет должен называться иначе, чем обычный.
+   */
+  generateCohortReportName(filters) {
+
+    const activeFilters = (filters || []).filter(filter => this.hasFilterValue(filter));
+
+    if (activeFilters.length === 0) {
+      return "Когортный отчет";
+    }
+
+    const parts = activeFilters.map(filter => this.formatFilterValueOnly_(filter));
+
+    return this.sanitizeSheetName("Когорта • " + parts.join(" • "));
+
+  },
+
+  /**
    * Значение фильтра без названия вопроса (для автогенерируемого
    * названия отчета). Для rating5/enps — оператор+число, для
    * остальных — выбранные варианты через запятую.
@@ -2873,11 +3122,23 @@ const ReportBuilder = {
 
     const normalizedFilters = this.getNormalizedFilters(reportData.filters);
 
-    const payload = JSON.stringify({
+    const payloadObject = {
       source: reportData.source,
       comparison: !!reportData.comparison,
       filters: normalizedFilters
-    });
+    };
+
+    // cohortOnly добавляется в сигнатуру, только когда он включен —
+    // это дает когортному отчету отдельную сигнатуру (он не заменяет
+    // собой обычный отчет с теми же фильтрами и наоборот), но НЕ меняет
+    // сигнатуру обычных отчетов: без этого поля JSON.stringify дает
+    // байт-в-байт то же самое, что и раньше, и уже существующие листы
+    // обычных отчетов по-прежнему находятся по своему старому ключу.
+    if (reportData.cohortOnly) {
+      payloadObject.cohortOnly = true;
+    }
+
+    const payload = JSON.stringify(payloadObject);
 
     return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, payload, Utilities.Charset.UTF_8)
       .map(byte => ((byte + 256) % 256).toString(16).padStart(2, "0"))

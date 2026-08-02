@@ -50,11 +50,23 @@ const Comparison = {
    * Разница eNPS в процентных пунктах. Если в одном из годов нет ни
    * одного ответа — значение и динамика не подставляются нулем, а
    * остаются null.
+   *
+   * significant — перекрываются ли доверительные интервалы (HR-002):
+   * true/false, если оба года посчитаны, иначе null. Без этого поля
+   * отчет красит любую дельту как тренд, даже если она внутри шума
+   * (см. MathStats.enpsConfidence).
    */
   compareENPS(enps2026, enps2025) {
 
     const value2026 = enps2026.total > 0 ? enps2026.enps : null;
     const value2025 = enps2025.total > 0 ? enps2025.enps : null;
+
+    const significant = (value2026 !== null && value2025 !== null)
+      ? MathStats.enpsChangeIsReal(
+          { enps: value2026, margin: enps2026.margin },
+          { enps: value2025, margin: enps2025.margin }
+        )
+      : null;
 
     return {
       value2026: value2026,
@@ -62,6 +74,9 @@ const Comparison = {
       delta: (value2026 !== null && value2025 !== null)
         ? value2026 - value2025
         : null,
+      margin2026: enps2026.margin,
+      margin2025: enps2025.margin,
+      significant: significant,
       categories: this.compareEnpsCategories_(enps2026, enps2025)
     };
 
@@ -83,6 +98,10 @@ const Comparison = {
       const percent2026 = enps2026.total > 0 ? enps2026[percentKey] : null;
       const percent2025 = enps2025.total > 0 ? enps2025[percentKey] : null;
 
+      const significant = (percent2026 !== null && percent2025 !== null)
+        ? MathStats.zTestProportions(enps2026[category], enps2026.total, enps2025[category], enps2025.total).significant
+        : null;
+
       return {
         category: category,
         count2026: enps2026[category],
@@ -91,7 +110,8 @@ const Comparison = {
         percent2025: percent2025,
         delta: (percent2026 !== null && percent2025 !== null)
           ? percent2026 - percent2025
-          : null
+          : null,
+        significant: significant
       };
 
     });
@@ -116,13 +136,24 @@ const Comparison = {
       const value2026 = item2026.count > 0 ? item2026.average : null;
       const value2025 = (item2025 && item2025.count > 0) ? item2025.average : null;
 
+      // welchTest (HR-002) — та же проверка значимости, что и для долей
+      // в compareDistributionItems, только для среднего балла. null,
+      // если сравнивать не с чем (см. value2026/value2025 выше).
+      const significant = (value2026 !== null && value2025 !== null)
+        ? MathStats.welchTestFromStats(
+            { mean: item2026.average, variance: item2026.variance, n: item2026.count },
+            { mean: item2025.average, variance: item2025.variance, n: item2025.count }
+          ).significant
+        : null;
+
       return {
         question: item2026.question,
         value2026: value2026,
         value2025: value2025,
         delta: (value2026 !== null && value2025 !== null)
           ? +(value2026 - value2025).toFixed(2)
-          : null
+          : null,
+        significant: significant
       };
 
     });
@@ -241,6 +272,13 @@ const Comparison = {
       const percent2026 = total2026 > 0 ? item2026.percent : null;
       const percent2025 = total2025 > 0 ? (item2025 ? item2025.percent : 0) : null;
 
+      // zTestProportions (HR-002) — та же проверка значимости, что и
+      // для eNPS/среднего балла (compareEnpsCategories_/
+      // compareAverageRatings), для доли конкретного варианта ответа.
+      const significant = (percent2026 !== null && percent2025 !== null)
+        ? MathStats.zTestProportions(count2026, total2026, count2025, total2025).significant
+        : null;
+
       return {
         answer: item2026.answer,
         count2026: count2026,
@@ -250,6 +288,7 @@ const Comparison = {
         delta: (percent2026 !== null && percent2025 !== null)
           ? percent2026 - percent2025
           : null,
+        significant: significant,
         renamedFrom: isDepartmentQuestion ? DepartmentAliases.getAliasesFor(item2026.answer) : []
       };
 

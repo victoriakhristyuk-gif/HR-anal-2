@@ -17,9 +17,10 @@ function getSurveyInfo(source) {
  * по количеству ответов в данных выбранного источника.
  */
 function getFilterableQuestions(source) {
-  var survey = loadSurveyData(source || '2026', true);
+  var resolvedSource = source || '2026';
+  var survey = loadEnrichedSurveyData_(resolvedSource, true);
 
-  return Filters.getFilterableQuestions().map(function(question) {
+  return Filters.getFilterableQuestions(resolvedSource).map(function(question) {
     var isOperatorType = question.type === 'rating5' || question.type === 'enps';
 
     return {
@@ -40,7 +41,7 @@ function getFilterableQuestions(source) {
  * на значение (см. BatchReports). Во всех остальных случаях, как и
  * раньше, строится ровно один отчет.
  */
-function buildReportFromSidebar(source, filters, compareWith2025, customReportName) {
+function buildReportFromSidebar(source, filters, compareWith2025, customReportName, cohortOnly) {
   ensureChangeTrigger_();
-  return BatchReports.run(source, filters, compareWith2025, customReportName);
+  return BatchReports.run(source, filters, compareWith2025, customReportName, cohortOnly);
 }

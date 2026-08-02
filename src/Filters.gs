@@ -12,10 +12,18 @@ const Filters = {
   operators: ["=", ">", ">=", "<", "<=", "!="],
 
   /**
-   * Вопросы, доступные для фильтрации
+   * Вопросы, доступные для фильтрации.
+   *
+   * Фильтры, обогащенные справочником "перформанс" (performanceOnly —
+   * см. Questions.catalogue), доступны только для источника "2026":
+   * в данных 2025 этих признаков нет (см. PerformanceDirectory.gs).
+   *
+   * @param {String} [source] - '2025' | '2026' | 'both'
    */
-  getFilterableQuestions() {
-    return Questions.getFilterQuestions();
+  getFilterableQuestions(source) {
+    return Questions.getFilterQuestions().filter(
+      question => !question.performanceOnly || source === "2026"
+    );
   },
 
   /**
@@ -25,8 +33,17 @@ const Filters = {
    * Для "Город" и "Отдел", если переданы данные текущего источника,
    * варианты сортируются по количеству ответов (по убыванию, при
    * равенстве — по алфавиту). Остальные вопросы — в исходном порядке.
+   *
+   * "Соответствие ожиданиям" и "Грейд" не имеют фиксированного списка
+   * в Questions.catalogue (answers: "") — варианты берутся динамически
+   * из фактических непустых значений листа "перформанс" (см.
+   * PerformanceDirectory.distinctValues).
    */
   getValueOptions(question, headers, data) {
+
+    if (this.isDynamicPerformanceQuestion(question)) {
+      return PerformanceDirectory.distinctValues(question.title);
+    }
 
     const options = question.answers || [];
 
@@ -39,19 +56,33 @@ const Filters = {
   },
 
   /**
+   * Вопросы, чьи варианты ответа берутся динамически из листа
+   * "перформанс", а не из Questions.catalogue.
+   */
+  isDynamicPerformanceQuestion(question) {
+    return question.title === "Соответствие ожиданиям" || question.title === "Грейд";
+  },
+
+  /**
    * Вопросы, для которых варианты ответа сортируются по частоте
    */
   isFrequencySorted(question) {
-    return question.title === "Город" || question.title === "Отдел";
+    return question.title === "Город" || question.title === "Отдел" || question.title === "Управление";
   },
 
   /**
    * Отсортировать варианты ответа по количеству встречающихся значений
    * в текущих данных: сначала самое частое, при равенстве — по алфавиту.
+   *
+   * "Управление" — производный вопрос (см. Headcount.gs): в данных
+   * ищем колонку "Отдел" и переводим каждое значение в управление
+   * перед подсчетом.
    */
   sortOptionsByFrequency(options, questionTitle, headers, data) {
 
-    const target = String(questionTitle).trim().toLowerCase().replace(/\s+/g, " ");
+    const isDivision = questionTitle === "Управление";
+    const lookupTitle = isDivision ? "Отдел" : questionTitle;
+    const target = String(lookupTitle).trim().toLowerCase().replace(/\s+/g, " ");
     const columnIndex = headers.findIndex(
       h => String(h).trim().toLowerCase().replace(/\s+/g, " ") === target
     );
@@ -70,7 +101,11 @@ const Filters = {
         return;
       }
 
-      const key = String(raw).trim().toLowerCase().replace(/\s+/g, " ");
+      const key = isDivision
+        ? String(Headcount.divisionOf(DepartmentAliases.canonicalize(raw)) || Headcount.UNASSIGNED_LABEL)
+            .trim().toLowerCase().replace(/\s+/g, " ")
+        : String(raw).trim().toLowerCase().replace(/\s+/g, " ");
+
       counts[key] = (counts[key] || 0) + 1;
 
     });

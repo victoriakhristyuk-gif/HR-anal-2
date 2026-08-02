@@ -71,6 +71,13 @@ const FilterEngine = {
    */
   matchesFilter(row, headers, filter) {
 
+    // "Управление" — не реальная колонка анкеты: считается по отделу
+    // строки через справочник численности (см. Headcount.gs), поэтому
+    // обрабатывается раньше поиска колонки по имени вопроса.
+    if (this.normalize(filter.question) === this.normalize("Управление")) {
+      return this.matchesDivisionFilter_(row, headers, filter);
+    }
+
     // Сравнение без учета регистра/пробелов — те же расхождения
     // заголовков, что уже встречались в Statistics.calculateDistribution.
     const columnKey = filter.dataTitle || filter.question;
@@ -102,6 +109,26 @@ const FilterEngine = {
     }
 
     return this.matchesValues(value, filter.values);
+
+  },
+
+  /**
+   * Фильтр по "Управлению" — производный от "Отдел" (см. Headcount.gs).
+   */
+  matchesDivisionFilter_(row, headers, filter) {
+
+    const departmentColumnIndex = headers.findIndex(
+      header => this.normalize(header) === this.normalize("Отдел")
+    );
+
+    if (departmentColumnIndex === -1) {
+      throw new Error("Не найден вопрос \"Отдел\" в данных (нужен для фильтра \"Управление\")");
+    }
+
+    const canonicalDepartment = DepartmentAliases.canonicalize(row[departmentColumnIndex]);
+    const division = Headcount.divisionOf(canonicalDepartment) || Headcount.UNASSIGNED_LABEL;
+
+    return this.matchesValues(division, filter.values);
 
   },
 

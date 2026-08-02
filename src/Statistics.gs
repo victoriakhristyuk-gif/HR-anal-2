@@ -45,6 +45,7 @@ const Statistics = {
     });
 
     const total = promoters + neutrals + detractors;
+    const ci = total ? MathStats.enpsConfidence(promoters, detractors, total) : null;
 
     return {
       promoters,
@@ -56,9 +57,12 @@ const Statistics = {
       neutralsPercent: total ? Math.round(neutrals / total * 100) : 0,
       detractorsPercent: total ? Math.round(detractors / total * 100) : 0,
 
-      enps: total
-        ? Math.round(MathStats.enpsConfidence(promoters, detractors, total).enps)
-        : 0
+      enps: ci ? Math.round(ci.enps) : 0,
+
+      // Доверительный интервал (±п.п., 95%) для той же выборки — нужен,
+      // чтобы Comparison.compareENPS мог отличить реальную динамику
+      // от шума (MathStats.enpsChangeIsReal), а не только показать дельту.
+      margin: ci ? MathStats.round(ci.margin, 1) : null
     };
 
   },
@@ -80,8 +84,7 @@ const Statistics = {
 
       const min = Scoring.minFor(question);
       const max = Scoring.maxFor(question);
-      let sum = 0;
-      let count = 0;
+      const values = [];
 
       rows.forEach(row => {
 
@@ -100,15 +103,21 @@ const Statistics = {
           return;
         }
 
-        sum += value;
-        count++;
+        values.push(value);
 
       });
 
+      // stats (mean/variance/n через MathStats.describe) — нужен для
+      // welchTest в ReportBuilder.buildDramaticChangesInput_ (HR-002),
+      // чтобы отличить драматичный, но статистически шумный сдвиг
+      // среднего балла от реального изменения.
+      const stats = MathStats.describe(values);
+
       result.push({
         question: question.title,
-        average: count ? +(sum / count).toFixed(2) : 0,
-        count: count
+        average: stats.n ? +(stats.mean).toFixed(2) : 0,
+        count: stats.n,
+        variance: stats.variance
       });
 
     });

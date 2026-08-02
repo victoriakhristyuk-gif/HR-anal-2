@@ -28,13 +28,196 @@ function getReportDistributionRows_(source, question, rows, headers) {
 
 }
 
-function buildReport(source, filters, compareWith2025, customReportName) {
+/**
+ * Показатели одной выборки (за один год), нужные и детальному отчету,
+ * и сравнению с другим периодом: eNPS, средние оценки, распределения,
+ * полные частоты Топ-5 и сам Топ-5. Общий для обычного пути buildReport
+ * (текущий и, при сравнении, 2025 годы) и для когортного отчета
+ * (buildCohortReport_, где обеими "выборками" оказываются согласованные
+ * массивы Cohort.build) — расчет один и тот же, отличаются только
+ * строки, которые в него передаются.
+ */
+function computeReportMetrics_(yearLabel, rows, headers) {
+
+  const enps = Statistics.calculateENPS(rows, headers);
+
+  const averageRatings = Statistics.calculateAverageRatings(rows, headers);
+
+  const distributions = Questions.getDistributionQuestions().map(question => ({
+    question: question,
+    items: Statistics.calculateDistribution(
+      getReportDistributionRows_(yearLabel, question, rows, headers),
+      headers,
+      question
+    )
+  }));
+
+  const topAnswerFrequencies = Questions.getTopAnswerQuestions().map(question => ({
+    question: question,
+    frequencies: Statistics.calculateAnswerFrequencies(rows, headers, question)
+  }));
+
+  const topAnswers = topAnswerFrequencies.map(entry => ({
+    question: entry.question,
+    items: Statistics.selectTopAnswers(entry.frequencies, 5)
+  }));
+
+  return {
+    enps: enps,
+    averageRatings: averageRatings,
+    distributions: distributions,
+    topAnswerFrequencies: topAnswerFrequencies,
+    topAnswers: topAnswers
+  };
+
+}
+
+/**
+ * Отчет по сквозной когорте: сотрудники, ответившие и в 2025, и в 2026.
+ *
+ * Фильтры применяются раздельно к строкам каждого года (как в
+ * AnalyticsService.build) — ДО сопоставления, а не после, иначе
+ * фильтр по данным, которые различаются между годами (например,
+ * "Отдел" при переходах между отделами), сузил бы уже готовую когорту
+ * несимметрично. Само сопоставление не переписывается — используется
+ * существующий Cohort.build.
+ *
+ * Показатели отчета считаются ТОЛЬКО по согласованным массивам
+ * matched.now/matched.before, поэтому размер выборки 2026 и 2025
+ * в когортном отчете всегда совпадает.
+ */
+function buildCohortReport_(source, filters, customReportName) {
+
+  if (source !== '2026') {
+    throw new Error("Сквозная когорта доступна только для источника \"Ответы 2026\"");
+  }
+
+  const survey = loadEnrichedSurveyData_('2026', true);
+  const filteredNow = FilterEngine.applyFilters(survey.data, survey.headers, filters);
+
+  let survey2025;
+
+  try {
+    survey2025 = loadEnrichedSurveyData_('2025', true);
+  } catch (error) {
+    throw new Error("Не удалось построить когортный отчет: " + error.message);
+  }
+
+  const filteredBefore = FilterEngine.applyFilters(survey2025.data, survey2025.headers, filters);
+
+  const matched = Cohort.build(filteredNow, filteredBefore, survey.headers, survey2025.headers);
+
+  if (matched.reason) {
+    throw new Error("Не удалось построить когортный отчет: " + matched.reason);
+  }
+
+  if (matched.size === 0) {
+    throw new Error(
+      "Сквозная когорта пуста: нет сотрудников, ответивших и в 2025, и в 2026 при заданных фильтрах"
+    );
+  }
+
+  const metricsNow = computeReportMetrics_('2026', matched.now, survey.headers);
+  const metricsBefore = computeReportMetrics_('2025', matched.before, survey2025.headers);
+
+  const comparison = Comparison.build(
+    { employees: matched.size, enps: metricsNow.enps, averageRatings: metricsNow.averageRatings },
+    { employees: matched.size, enps: metricsBefore.enps, averageRatings: metricsBefore.averageRatings },
+    metricsNow.distributions,
+    metricsBefore.distributions,
+    metricsNow.topAnswerFrequencies,
+    metricsBefore.topAnswerFrequencies
+  );
+
+  const roster = Cohort.roster(matched, survey.headers, survey2025.headers);
+
+  const trimmedCustomName = (customReportName || "").trim();
+  const isCustomName = trimmedCustomName.length > 0;
+  const reportName = isCustomName
+    ? ReportBuilder.sanitizeSheetName(trimmedCustomName)
+    : ReportBuilder.generateCohortReportName(filters);
+
+  const cohortInfo = { size: matched.size, droppedDuplicates: matched.droppedDuplicates };
+
+  const reportData = {
+    employees: matched.size,
+    filters: filters,
+    source: '2026',
+    currentYear: '2026',
+    previousYear: '2025',
+    enps: metricsNow.enps,
+    enpsByYear: { '2026': metricsNow.enps, '2025': metricsBefore.enps },
+    employeesByYear: { '2026': matched.size, '2025': matched.size },
+    averageRatings: metricsNow.averageRatings,
+    distributions: metricsNow.distributions,
+    topAnswers: metricsNow.topAnswers,
+    headers: survey.headers,
+    filteredRows: matched.now,
+    comparison: comparison,
+    cohortOnly: true,
+    cohortInfo: cohortInfo,
+    cohortRoster: roster
+  };
+
+  const sheet = ReportBuilder.createReport(reportData, reportName, isCustomName);
+
+  let summaryError = null;
+
+  try {
+    Summary.update(reportData, sheet);
+  } catch (error) {
+    summaryError = error.message;
+  }
+
+  return {
+    source: '2026',
+    employees: matched.size,
+    filters: filters,
+    sheetName: sheet.getName(),
+    comparison: comparison,
+    summaryError: summaryError,
+    cohortOnly: true,
+    cohortInfo: cohortInfo
+  };
+
+}
+
+/**
+ * Есть ли среди фильтров хотя бы один, доступный только для "Ответы
+ * 2026" (обогащение справочником "перформанс" — см.
+ * Questions.getPerformanceOnlyTitles, PerformanceDirectory.gs).
+ */
+function hasPerformanceOnlyFilter_(filters) {
+
+  const titles = Questions.getPerformanceOnlyTitles();
+
+  return (filters || []).some(filter => titles.indexOf(filter.question) !== -1);
+
+}
+
+function buildReport(source, filters, compareWith2025, customReportName, cohortOnly) {
+
+  // В 2025 году нет ни "Соответствие ожиданиям", ни "Грейд", ни "Роль
+  // в отделе" — сравнивать отфильтрованный по ним срез 2026 со всей
+  // компанией 2025 (или строить когорту, которая тоже сопоставляет
+  // с 2025) было бы некорректно. Останавливаем построение ДО загрузки
+  // данных.
+  if ((compareWith2025 || cohortOnly) && hasPerformanceOnlyFilter_(filters)) {
+    throw new Error(
+      "Сравнение с 2025 недоступно для фильтров «Соответствие ожиданиям», «Грейд» и «Роль в отделе»: " +
+      "в данных 2025 этих признаков нет."
+    );
+  }
+
+  if (cohortOnly) {
+    return buildCohortReport_(source, filters, customReportName);
+  }
 
   // ==========================================================
   // Загружаем данные
   // ==========================================================
 
-  const survey = loadSurveyData(source, true);
+  const survey = loadEnrichedSurveyData_(source, true);
 
   // ==========================================================
   // Применяем фильтры
@@ -109,7 +292,7 @@ function buildReport(source, filters, compareWith2025, customReportName) {
 
     if (!samplesByYear[year]) {
 
-      const yearSurvey = loadSurveyData(year, true);
+      const yearSurvey = loadEnrichedSurveyData_(year, true);
 
       samplesByYear[year] = {
         headers: yearSurvey.headers,

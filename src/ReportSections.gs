@@ -40,7 +40,7 @@ const ReportSections = {
     {
       name: "💼 Удовлетворенность работой и оплатой",
       questions: [
-        "График",
+        "Work-life balance",
         "Задачи",
         "Ожидания",
         "Проф мнение",

@@ -208,6 +208,51 @@ const Cohort = {
 
   },
 
+  /**
+   * Состав когорты для вывода в отчет: по одной строке на человека,
+   * попавшего в cohort.now/cohort.before (build() уже исключил дубли
+   * ключа и неподписанные анкеты — здесь ничего повторно не проверяется
+   * и не отбрасывается).
+   *
+   * nameBefore возвращается только если написание в 2025 отличается от
+   * 2026 (по тому же нормализованному ключу, что и само сопоставление) —
+   * иначе показывать одно и то же ФИО дважды бессмысленно.
+   */
+  roster(cohort, headers, headersBefore) {
+
+    headersBefore = headersBefore || headers;
+
+    const columnIndex = headers.findIndex(
+      h => String(h).trim().toLowerCase() === this.KEY_QUESTION.trim().toLowerCase()
+    );
+
+    const columnIndexBefore = headersBefore.findIndex(
+      h => String(h).trim().toLowerCase() === this.KEY_QUESTION.trim().toLowerCase()
+    );
+
+    if (columnIndex === -1 || columnIndexBefore === -1) return [];
+
+    return cohort.now.map((row, i) => {
+
+      const nameNow = String(row[columnIndex]).trim();
+      const rawNameBefore = String(cohort.before[i][columnIndexBefore]).trim();
+
+      // Сравнение буквальное (не через key_): "исходное написание
+      // отличается" значит любое отличие символ в символ — регистр,
+      // лишний пробел, "ё"/"е" — а не только то, что ломает
+      // сопоставление в build().
+      const sameSpelling = nameNow === rawNameBefore;
+
+      return {
+        nameNow: nameNow,
+        nameBefore: sameSpelling ? null : rawNameBefore,
+        status: "Совпадение найдено"
+      };
+
+    });
+
+  },
+
   key_(value) {
 
     if (value === null || value === undefined) return "";

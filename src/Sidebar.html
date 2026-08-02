@@ -609,6 +609,17 @@
           <span class="slider"></span>
         </label>
       </div>
+
+      <div id="cohortBlock" class="row-between" style="display:none;">
+        <span>Только сквозная когорта — сотрудники, ответившие в 2025 и 2026</span>
+        <label class="switch">
+          <input type="checkbox" id="cohortOnly">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="cohortHint" class="hint" style="display:none;">
+        Отчет будет построен только по сотрудникам, ответившим оба года, и будет содержать их ФИО.
+      </div>
     </div>
 
     <div class="card filters-block">
@@ -1187,12 +1198,15 @@
       function resetFilters() {
         activeFilters = [];
         document.getElementById('dataSource').value = '2026';
+        document.getElementById('compareWith2025').checked = false;
+        document.getElementById('cohortOnly').checked = false;
         document.getElementById('surveyInfo').innerHTML = '';
         document.getElementById('surveyInfo').className = '';
         document.getElementById('filtersError').textContent = '';
         document.getElementById('filtersError').className = '';
         renderActiveFilters();
         updateCompareVisibility();
+        updateCohortVisibility();
         loadFilterQuestions();
       }
 
@@ -1210,6 +1224,46 @@
         } else {
           compareBlock.style.display = 'none';
           compareCheckbox.checked = false;
+        }
+      }
+
+      /**
+       * Режим "Только сквозная когорта" доступен только для источника
+       * 2026 (когорта всегда строится ОТ 2026 к 2025). При переходе на
+       * 2025 флажок выключается и блокировка "Сравнить с 2025" снимается.
+       */
+      function updateCohortVisibility() {
+        var source = document.getElementById('dataSource').value;
+        var cohortBlock = document.getElementById('cohortBlock');
+        var cohortHint = document.getElementById('cohortHint');
+        var cohortCheckbox = document.getElementById('cohortOnly');
+
+        if (source === '2026') {
+          cohortBlock.style.display = '';
+          cohortHint.style.display = '';
+        } else {
+          cohortBlock.style.display = 'none';
+          cohortHint.style.display = 'none';
+          cohortCheckbox.checked = false;
+        }
+
+        updateCompareLockState();
+      }
+
+      /**
+       * Включенная когорта требует сравнения с 2025 — "Сравнить с 2025"
+       * автоматически включается и блокируется от ручного выключения,
+       * пока когортный режим активен.
+       */
+      function updateCompareLockState() {
+        var compareCheckbox = document.getElementById('compareWith2025');
+        var cohortCheckbox = document.getElementById('cohortOnly');
+
+        if (cohortCheckbox.checked) {
+          compareCheckbox.checked = true;
+          compareCheckbox.disabled = true;
+        } else {
+          compareCheckbox.disabled = false;
         }
       }
 
@@ -1239,6 +1293,19 @@
       /**
        * Предпросмотр единственного отчета — прежний вид сайдбара.
        */
+      /**
+       * Строка про использованную когорту — только цифры (размер и
+       * отброшенные неоднозначные совпадения), без единого ФИО: состав
+       * когорты виден только на самом листе отчета (см. Cohort.roster).
+       */
+      function formatCohortInfoLine(report) {
+        if (!report.cohortOnly || !report.cohortInfo) return '';
+
+        return '<br><br><b>Использована сквозная когорта</b><br>' +
+          'Размер когорты: ' + report.cohortInfo.size + '<br>' +
+          'Отброшено неоднозначных совпадений: ' + report.cohortInfo.droppedDuplicates;
+      }
+
       function renderSingleResult(infoEl, source, report) {
         var filtersText = report.filters.length
           ? report.filters.map(formatFilterText).join('; ')
@@ -1258,6 +1325,7 @@
           'Источник: ' + source + '<br>' +
           'Количество сотрудников: ' + report.employees + '<br><br>' +
           'Фильтры: ' + filtersText +
+          formatCohortInfoLine(report) +
           summaryWarning;
       }
 
@@ -1299,6 +1367,13 @@
           line.textContent = '✓ ' + report.label +
             ' (' + report.employees + ')' + sheetSuffix;
 
+          if (report.cohortOnly && report.cohortInfo) {
+            var cohortNote = document.createElement('span');
+            cohortNote.textContent = ' — когорта: ' + report.cohortInfo.size +
+              ', отброшено неоднозначных: ' + report.cohortInfo.droppedDuplicates;
+            line.appendChild(cohortNote);
+          }
+
           if (report.summaryError) {
             line.title = 'Сводная аналитика не обновлена: ' + report.summaryError;
 
@@ -1317,13 +1392,16 @@
       document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
       document.getElementById('dataSource').addEventListener('change', function() {
         updateCompareVisibility();
+        updateCohortVisibility();
         loadFilterQuestions();
       });
+      document.getElementById('cohortOnly').addEventListener('change', updateCompareLockState);
 
       document.getElementById('buildReportBtn').addEventListener('click', function () {
 
         var source = document.getElementById('dataSource').value;
         var compareWith2025 = document.getElementById('compareWith2025').checked;
+        var cohortOnly = document.getElementById('cohortOnly').checked;
         var customReportName = document.getElementById('reportName').value;
         var infoEl = document.getElementById('surveyInfo');
         var batchCount = countBatchReports();
@@ -1346,7 +1424,7 @@
             infoEl.className = 'error';
             infoEl.textContent = error.message;
           })
-          .buildReportFromSidebar(source, activeFilters, compareWith2025, customReportName);
+          .buildReportFromSidebar(source, activeFilters, compareWith2025, customReportName, cohortOnly);
 
       });
 
@@ -1373,6 +1451,7 @@
       });
 
       updateCompareVisibility();
+      updateCohortVisibility();
       loadFilterQuestions();
     </script>
   </body>

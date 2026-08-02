@@ -37,7 +37,7 @@ const AnalyticsService = {
 
     // ---------- 1. Данные ----------
 
-    const survey = loadSurveyData(sourceYear, true);
+    const survey = loadEnrichedSurveyData_(sourceYear, true);
     const headers = survey.headers;
     const rows = FilterEngine.applyFilters(survey.data, headers, filters);
 
@@ -46,7 +46,7 @@ const AnalyticsService = {
     let hasPrevious = false;
 
     try {
-      const previousSurvey = loadSurveyData(previousYear, true);
+      const previousSurvey = loadEnrichedSurveyData_(previousYear, true);
       previousHeaders = previousSurvey.headers;
       previousRows = FilterEngine.applyFilters(previousSurvey.data, previousHeaders, filters);
       hasPrevious = true;
@@ -107,24 +107,51 @@ const AnalyticsService = {
 
     // ---------- 8. Срезы ----------
 
+    // Численность (Headcount.gs) есть только за 2026 год — явка для
+    // "Отдел"/"Управление" считается, только если строится отчет за
+    // тот же год, иначе показывать нечего (и можно случайно сравнить
+    // ответы одного года со штатом другого).
+    const includeHeadcount = sourceYear === Headcount.YEAR;
+
     const dimensions = [
       { title: "Формат работы", normalizer: null },
       { title: "Стаж", normalizer: null },
       { title: "Город", normalizer: Segments.cityNormalizer() },
-      { title: "Отдел", normalizer: null }
+      { title: "Отдел", normalizer: null },
+      { title: "Управление", normalizer: null }
     ];
 
-    const segments = dimensions.map(dimension => Segments.analyze(
-      rows, headers, questions, dimension.title,
-      {
-        normalizer: dimension.normalizer,
-        previousRows: hasPrevious ? previousRows : null,
-        previousHeaders: previousHeaders
-      }
+    // "Соответствие ожиданиям" и "Grade" существуют только в 2026
+    // (обогащение справочником "перформанс" — см. PerformanceDirectory.gs).
+    // Срезы добавляются только для отчета за 2026 и ВСЕГДА без
+    // прошлогодних строк (noHistory), даже если для остальных срезов
+    // hasPrevious=true: подставлять сюда 2025 нельзя — признаков там нет.
+    if (sourceYear === "2026") {
+      dimensions.push(
+        { title: "Соответствие ожиданиям", normalizer: null, noHistory: true },
+        { title: "Грейд", normalizer: null, noHistory: true },
+        { title: "Роль в отделе", normalizer: null, noHistory: true }
+      );
+    }
+
+    const segments = dimensions.map(dimension => Object.assign(
+      Segments.analyze(
+        rows, headers, questions, dimension.title,
+        {
+          normalizer: dimension.normalizer,
+          previousRows: dimension.noHistory ? null : (hasPrevious ? previousRows : null),
+          previousHeaders: previousHeaders,
+          includeHeadcount: includeHeadcount &&
+            (dimension.title === "Отдел" || dimension.title === "Управление")
+        }
+      ),
+      { noHistory: !!dimension.noHistory }
     ));
 
+    // compositionShift сравнивает состав среза год-к-году — бессмысленно
+    // и некорректно для срезов, которых в 2025 не существует.
     const composition = hasPrevious
-      ? dimensions.map(dimension => ({
+      ? dimensions.filter(dimension => !dimension.noHistory).map(dimension => ({
           dimension: dimension.title,
           shifts: Segments.compositionShift(rows, previousRows, headers, previousHeaders, dimension.title, dimension.normalizer)
             .filter(shift => shift.material)
@@ -451,11 +478,13 @@ const AnalyticsService = {
             .join(", ");
 
           findings.push({
-            severity: segment.fragile ? "warning" : "critical",
+            severity: (segment.fragile || segment.lowCoverage) ? "warning" : "critical",
             title: "Срез с отклонениями: " + segment.name + " (" + dimension.dimension + ", n=" + segment.n + ")",
             text: bad + ". " + (segment.fragile
               ? "n<" + Norms.FRAGILE_SEGMENT_SIZE + " — читать как сигнал для точечной проверки, не как факт."
-              : "Размер группы достаточен для вывода.")
+              : segment.lowCoverage
+                ? "Явка " + segment.responseRatePercent + "% — вывод может не отражать мнение всего среза."
+                : "Размер группы достаточен для вывода.")
           });
 
         });

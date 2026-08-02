@@ -78,7 +78,7 @@ const Summary = {
     { block: "Демография", title: "Стаж", kind: "distribution", question: "Стаж" },
     { block: "Демография", title: "Формат работы", kind: "distribution", question: "Формат работы" },
 
-    { block: "Распределения", title: "График", kind: "distribution", question: "График" },
+    { block: "Распределения", title: "Work-life balance", kind: "distribution", question: "Work-life balance" },
     { block: "Распределения", title: "Задачи", kind: "distribution", question: "Задачи" },
     { block: "Распределения", title: "Ожидания", kind: "distribution", question: "Ожидания" },
     { block: "Распределения", title: "Проф мнение", kind: "distribution", question: "Проф мнение" },
@@ -632,10 +632,21 @@ const Summary = {
    */
   buildSampleKey_(reportData) {
 
-    return JSON.stringify({
+    const keyObject = {
       source: reportData.source,
       filters: ReportBuilder.getNormalizedFilters(reportData.filters)
-    });
+    };
+
+    // Как и в ReportBuilder.getReportKey_: cohortOnly входит в ключ,
+    // только когда он включен, поэтому ключи уже существующих строк
+    // обычных отчетов (без этого поля) продолжают читаться как прежде,
+    // а когортная выборка получает СВОЮ строку — даже с теми же
+    // фильтрами, что и обычный отчет за 2026.
+    if (reportData.cohortOnly) {
+      keyObject.cohortOnly = true;
+    }
+
+    return JSON.stringify(keyObject);
 
   },
 

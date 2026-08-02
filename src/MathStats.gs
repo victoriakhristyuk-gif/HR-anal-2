@@ -249,11 +249,19 @@ const MathStats = {
    * в третьем знаке и на выводы не влияет.
    */
   welchTest(vectorA, vectorB) {
+    return this.welchTestFromStats(this.describe(vectorA), this.describe(vectorB));
+  },
 
-    const a = this.describe(vectorA);
-    const b = this.describe(vectorB);
+  /**
+   * То же самое, что welchTest, но принимает уже посчитанные {mean,
+   * variance, n} вместо сырых векторов — для мест, где сохранять
+   * векторы ответов ради одного теста избыточно (например,
+   * ReportBuilder.buildDramaticChangesInput_, где уже есть готовые
+   * mean/count по каждому году из Statistics.calculateAverageRatings).
+   */
+  welchTestFromStats(a, b) {
 
-    if (a.n < 2 || b.n < 2) return { t: null, significant: false };
+    if (!a || !b || a.n < 2 || b.n < 2) return { t: null, significant: false };
 
     const se = Math.sqrt(a.variance / a.n + b.variance / b.n);
 
@@ -379,14 +387,20 @@ const MathStats = {
   /**
    * Перекрываются ли доверительные интервалы двух eNPS.
    * Если да — говорить о динамике нельзя.
+   *
+   * Порог — совместная ошибка двух независимых интервалов
+   * (sqrt(marginA² + marginB²)), а не (marginA + marginB) — точная
+   * формула, а не приближение "к sqrt(2)", которое было верно только
+   * при marginA ≈ marginB и занижало порог при сильно разных выборках.
    */
   enpsChangeIsReal(ciA, ciB) {
 
     if (ciA.enps === null || ciB.enps === null) return null;
 
     const gap = Math.abs(ciA.enps - ciB.enps);
+    const jointMargin = Math.sqrt(ciA.margin * ciA.margin + ciB.margin * ciB.margin);
 
-    return gap > (ciA.margin + ciB.margin) / 1.4;
+    return gap > jointMargin;
 
   },
 

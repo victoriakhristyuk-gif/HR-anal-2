@@ -46,7 +46,13 @@ const Segments = {
    */
   splitBy(rows, headers, questionTitle, normalizer) {
 
-    const target = this.normalizeKey_(questionTitle);
+    // "Управление" — не реальная колонка анкеты: она считается по
+    // отделу через справочник численности (Headcount), поэтому ищем
+    // в данных колонку "Отдел", а не "Управление".
+    const isDivisionDimension = this.normalizeKey_(questionTitle) === this.normalizeKey_("Управление");
+    const lookupTitle = isDivisionDimension ? "Отдел" : questionTitle;
+
+    const target = this.normalizeKey_(lookupTitle);
     const columnIndex = headers.findIndex(h => this.normalizeKey_(h) === target);
 
     if (columnIndex === -1) return {};
@@ -68,8 +74,16 @@ const Segments = {
       // бакет (см. DepartmentAliases), иначе переименованный отдел
       // попадает в текущем и прошлом годах в разные бакеты и год-к-году
       // join ниже (по normalizeKey_) их не свяжет.
-      if (this.normalizeKey_(questionTitle) === this.normalizeKey_("Отдел")) {
+      if (isDivisionDimension || this.normalizeKey_(questionTitle) === this.normalizeKey_("Отдел")) {
         display = DepartmentAliases.canonicalize(display);
+      }
+
+      // Разрез "Управление" — заменяем отдел на его управление
+      // (см. Headcount.gs). Отделы без управления в справочнике
+      // (в т.ч. отделы вне справочника численности) попадают в общий
+      // бакет "не отнесено", а не пропадают из отчета.
+      if (isDivisionDimension) {
+        display = Headcount.divisionOf(display) || Headcount.UNASSIGNED_LABEL;
       }
 
       if (!display) return;
@@ -94,6 +108,19 @@ const Segments = {
   },
 
   /**
+   * Единая категория для "удалённо/город не указан" (см. cityNormalizer).
+   * До этой правки "Не указан" и "Удалённо (город не указан)" были
+   * двумя разными бакетами — по сути один и тот же случай (нет
+   * содержательного города), просто с разной формулировкой в ответе.
+   * Раздельный подсчет занижал видимую численность каждой из групп и
+   * дважды считался в отклонениях. Слиты в одну категорию ДО
+   * группировки (внутри самого нормализатора), поэтому дальше по
+   * пайплайну (Segments.splitBy → analyze → compositionShift →
+   * AnalyticsWriter) она везде одна, без двойного подсчета.
+   */
+  UNSPECIFIED_CITY_LABEL: "Город не указан / удалённо",
+
+  /**
    * Нормализатор для свободного текстового поля «Город».
    *
    * В данных 2026 поле заполнялось вручную: 66 вариантов написания,
@@ -115,15 +142,24 @@ const Segments = {
 
     const majorLower = major.map(c => c.toLowerCase());
 
-    return function (value) {
+    return value => {
 
-      const lower = value.toLowerCase();
+      // Лишние пробелы/регистр не должны создавать отдельные бакеты —
+      // splitBy() уже обрезает крайние пробелы, но здесь применяем то
+      // же самое независимо от вызывающего кода, плюс схлопываем
+      // внутренние повторы пробелов ("Москва  " / "москва" и т.п.).
+      const cleaned = String(value).trim().replace(/\s+/g, " ");
+      const lower = cleaned.toLowerCase();
       const index = majorLower.indexOf(lower);
 
       if (index !== -1) return major[index];
 
-      if (/удал|перемещ/i.test(value)) return "Удалённо (город не указан)";
-      if (value === "-" || value === "—" || /^друго/i.test(value)) return "Не указан";
+      // "Удалённо"/"перемещаюсь" и "не указан"/"-"/"—"/"другое" —
+      // формально разные ответы, но оба означают отсутствие
+      // содержательного города. Единая категория — см.
+      // UNSPECIFIED_CITY_LABEL.
+      if (/удал|перемещ/i.test(cleaned)) return this.UNSPECIFIED_CITY_LABEL;
+      if (cleaned === "-" || cleaned === "—" || /^друго/i.test(cleaned)) return this.UNSPECIFIED_CITY_LABEL;
 
       return "Прочие города";
 
@@ -221,6 +257,17 @@ const Segments = {
     const company = this.metricsFor(rows, headers, questions);
     const buckets = this.splitBy(rows, headers, dimension, options.normalizer);
 
+    // Общая явка по компании — только для разрезов "Отдел"/"Управление"
+    // (см. Headcount.gs). Считается от ВСЕЙ штатной численности, а
+    // rows.length — от текущих фильтров (см. пояснение у сегментов ниже).
+    if (options.includeHeadcount) {
+      const companyHeadcount = Headcount.total();
+      company.headcount = companyHeadcount;
+      company.responseRatePercent = companyHeadcount
+        ? MathStats.round(rows.length / companyHeadcount * 100, 1)
+        : null;
+    }
+
     const previousBuckets = options.previousRows
       ? this.splitBy(options.previousRows, previousHeaders, dimension, options.normalizer)
       : {};
@@ -283,8 +330,40 @@ const Segments = {
       // "Отдел" (см. DepartmentAliases). Для остальных срезов (Город,
       // Стаж, Формат работы) отдел ни при чем — оставляем null/пусто.
       const isDepartmentDimension = this.normalizeKey_(dimension) === this.normalizeKey_("Отдел");
+      const isDivisionDimension = this.normalizeKey_(dimension) === this.normalizeKey_("Управление");
       const departmentId = isDepartmentDimension ? DepartmentAliases.resolve(name).id : null;
       const renamedFrom = isDepartmentDimension ? DepartmentAliases.getAliasesFor(name) : [];
+
+      // Численность и явка — только для срезов "Отдел" и "Управление"
+      // (см. Headcount.gs, только 2026 год). Явка считается от общей
+      // численности отдела/управления, а не только от отфильтрованной
+      // части — то есть при активных фильтрах это «явка среди тех, кто
+      // попадает под фильтр» относительно ВСЕЙ численности отдела, а
+      // не оценка ответивших без фильтра.
+      let headcount = null;
+      let responseRatePercent = null;
+
+      if (options.includeHeadcount) {
+        if (isDepartmentDimension) {
+          const entry = Headcount.forDepartment(name);
+          headcount = entry ? entry.count : null;
+        } else if (isDivisionDimension) {
+          headcount = Headcount.forDivision(name).count || null;
+        }
+      }
+
+      if (headcount) {
+        responseRatePercent = MathStats.round(group.length / headcount * 100, 1);
+      }
+
+      // Явка выше 100% невозможна и означает, что справочник численности
+      // (Headcount.gs) для этого отдела/управления битый или устарел —
+      // показывать такой процент как обычную низкую/нормальную явку
+      // означало бы выдавать заведомо неверные данные за факт.
+      const headcountUnreliable = responseRatePercent !== null && responseRatePercent > 100;
+
+      const lowCoverage = !headcountUnreliable && responseRatePercent !== null &&
+        responseRatePercent < Norms.LOW_COVERAGE_THRESHOLD_PERCENT;
 
       // 3. Динамика к прошлому году — для любой непустой базы.
       // Размер обеих групп сохраняется в результате, а малая текущая
@@ -327,6 +406,10 @@ const Segments = {
         renamedFrom: renamedFrom,
         n: group.length,
         previousN: previousN,
+        headcount: headcount,
+        responseRatePercent: responseRatePercent,
+        lowCoverage: lowCoverage,
+        headcountUnreliable: headcountUnreliable,
         metrics: metrics,
         deviations: deviations,
         badCount: deviations.filter(d => d.bad).length,

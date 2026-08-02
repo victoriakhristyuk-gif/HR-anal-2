@@ -31,7 +31,7 @@ const BatchReports = {
    *
    * @returns {{source: String, batch: Boolean, reports: Array<Object>}}
    */
-  run(source, filters, compareWith2025, customReportName) {
+  run(source, filters, compareWith2025, customReportName, cohortOnly) {
 
     const filterSets = this.expandFilterSets(filters);
 
@@ -40,7 +40,7 @@ const BatchReports = {
     // наверх в сайдбар, а не превращается в "0 отчетов".
     if (filterSets.length === 0) {
 
-      const result = buildReport(source, filters, compareWith2025, customReportName);
+      const result = buildReport(source, filters, compareWith2025, customReportName, cohortOnly);
 
       return {
         source: source,
@@ -67,7 +67,7 @@ const BatchReports = {
 
       try {
 
-        const result = buildReport(source, filterSet.filters, compareWith2025, batchReportName);
+        const result = buildReport(source, filterSet.filters, compareWith2025, batchReportName, cohortOnly);
 
         return this.describeSuccess_(result, filterSet.label);
 
@@ -179,6 +179,13 @@ const BatchReports = {
       employees: result.employees,
       filters: result.filters,
       summaryError: result.summaryError,
+      // Признак когорты и ее размер — для отображения в Sidebar
+      // ("использована сквозная когорта, n=..."). Только цифры: ФИО
+      // участников в этот результат никогда не попадают (см. Cohort.roster
+      // и ReportBuilder.renderCohortRoster_ — состав виден только на
+      // самом листе отчета).
+      cohortOnly: !!result.cohortOnly,
+      cohortInfo: result.cohortInfo || null,
       error: null
     };
 

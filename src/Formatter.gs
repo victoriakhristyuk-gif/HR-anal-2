@@ -222,6 +222,112 @@ const Formatter = {
   },
 
   /**
+   * Подсказка при наведении на ячейку — тонкая обертка над setNote
+   * для единообразия вызовов (см. Glossary.gs — тексты подсказок).
+   */
+  note(range, text) {
+    range.setNote(text);
+  },
+
+  /**
+   * Заголовок листа расширенной аналитики: строка 1 — двухчастное
+   * название листа ("понятный смысл — термин", см. Glossary.gs),
+   * строка 2 — короткое описание, что показывает лист и как им
+   * пользоваться, строка 3 — пустая. Возвращает номер первой
+   * свободной строки под таблицу (4), чтобы вызывающий код знал,
+   * с какой строки писать dump_.
+   */
+  writeSheetIntro(sheet, title, description, numCols) {
+
+    const titleRange = sheet.getRange(1, 1, 1, numCols);
+    titleRange.setValue(title);
+    titleRange
+      .setFontWeight("bold")
+      .setFontSize(13)
+      .setFontColor("#ffffff")
+      .setBackground(AnalyticsWriter.HEADER_BG)
+      .setVerticalAlignment("middle")
+      .mergeAcross();
+    sheet.setRowHeight(1, 30);
+
+    const descRange = sheet.getRange(2, 1, 1, numCols);
+    descRange.setValue(description);
+    descRange
+      .setFontStyle("italic")
+      .setFontColor(this.MUTED_TEXT_COLOR)
+      .setWrap(true)
+      .setVerticalAlignment("middle")
+      .mergeAcross();
+    sheet.setRowHeight(2, 30);
+
+    return 4;
+
+  },
+
+  /**
+   * Свёрнутый по умолчанию блок "Подробнее о расчете" под таблицей
+   * листа расширенной аналитики: для каждого ключа из entryKeys берет
+   * запись из Glossary.ENTRIES и печатает подзаголовок (двухчастное
+   * title) и по одной строке на "зачем"/"формула"/"как читать"/
+   * "на что обратить внимание". Возвращает число записанных строк.
+   *
+   * @param {Object} examples - {ключ методики: строка примера | null}.
+   *   Строка приходит из Glossary.EXAMPLE.<ключ>(...), посчитанного
+   *   вызывающим кодом (AnalyticsWriter.gs) из реальных данных этого
+   *   запуска — здесь она просто печатается отдельной строкой, без
+   *   собственных чисел из методички.
+   */
+  writeGlossaryBlock(sheet, startRow, numCols, entryKeys, examples) {
+
+    examples = examples || {};
+    const rows = [];
+
+    entryKeys.forEach(key => {
+
+      const entry = Glossary.ENTRIES[key];
+      if (!entry) return;
+
+      rows.push([entry.title, "heading"]);
+      rows.push(["Зачем это нужно: " + entry.why, "text"]);
+      rows.push(["Как рассчитывается: " + entry.formula, "text"]);
+      rows.push(["Простыми словами: " + entry.formulaPlain, "text"]);
+      rows.push(["Как читать результат: " + entry.howToRead, "text"]);
+      rows.push(["На что обратить внимание: " + entry.limitations, "text"]);
+
+      if (examples[key]) {
+        rows.push([examples[key], "example"]);
+      }
+
+      rows.push(["", "spacer"]);
+
+    });
+
+    if (!rows.length) return 0;
+
+    rows.forEach((row, i) => {
+
+      const range = sheet.getRange(startRow + i, 1, 1, numCols);
+      range.merge();
+      range.setValue(row[0]);
+      range.setWrap(true).setVerticalAlignment("top");
+
+      if (row[1] === "heading") {
+        range.setFontWeight("bold").setFontColor(this.LABEL_TEXT_COLOR).setFontSize(11);
+      } else if (row[1] === "example") {
+        range.setFontStyle("italic").setFontWeight("bold").setFontColor(this.HIGHLIGHT_TEXT_COLOR).setFontSize(9);
+      } else {
+        range.setFontSize(9).setFontColor(this.MUTED_TEXT_COLOR);
+      }
+
+    });
+
+    this.groupRows(sheet, startRow, rows.length, true);
+
+    return rows.length;
+
+  },
+
+  /**
    * Толстая верхняя граница — визуально отделяет крупный блок
    * (например, "Сырые данные") от всего, что расположено выше.
    */
