@@ -22,9 +22,38 @@ function getReportDistributionRows_(source, question, rows, headers) {
 
   const isDepartment = Statistics.normalize_(question.title) === Statistics.normalize_("Отдел");
 
-  return source === '2025' && isDepartment
-    ? Comparison.remapDepartmentRows_(rows, headers)
-    : rows;
+  if (!isDepartment) return rows;
+
+  const columnIndex = headers.findIndex(
+    header => Statistics.normalize_(header) === Statistics.normalize_("Отдел")
+  );
+
+  if (columnIndex === -1) return rows;
+
+  return rows.map(row => {
+    const displayName = Headcount.resolveDepartment(row[columnIndex]).name;
+    if (displayName === row[columnIndex]) return row;
+    const copy = row.slice();
+    copy[columnIndex] = displayName;
+    return copy;
+  });
+
+}
+
+/** Дополнить варианты отдела названиями из редактируемого справочника. */
+function getReportDistributionQuestion_(question) {
+
+  if (Statistics.normalize_(question.title) !== Statistics.normalize_("Отдел")) return question;
+
+  // Последние названия из справочника идут первыми, чтобы старый
+  // вариант из фиксированного каталога не вытеснил их при дедупликации
+  // по стабильному ID.
+  const answers = Headcount.listDepartments().concat(question.answers || []);
+  const unique = answers.filter((value, index, list) =>
+    list.findIndex(candidate => Headcount.departmentKey(candidate) === Headcount.departmentKey(value)) === index
+  );
+
+  return Object.assign({}, question, { answers: unique });
 
 }
 
@@ -37,20 +66,23 @@ function getReportDistributionRows_(source, question, rows, headers) {
  * массивы Cohort.build) — расчет один и тот же, отличаются только
  * строки, которые в него передаются.
  */
-function computeReportMetrics_(yearLabel, rows, headers) {
+function computeReportMetrics_(yearLabel, rows, headers, populationSize) {
 
-  const enps = Statistics.calculateENPS(rows, headers);
+  const enps = Statistics.calculateENPS(rows, headers, populationSize);
 
-  const averageRatings = Statistics.calculateAverageRatings(rows, headers);
+  const averageRatings = Statistics.calculateAverageRatings(rows, headers, populationSize);
 
-  const distributions = Questions.getDistributionQuestions().map(question => ({
-    question: question,
-    items: Statistics.calculateDistribution(
-      getReportDistributionRows_(yearLabel, question, rows, headers),
-      headers,
-      question
-    )
-  }));
+  const distributions = Questions.getDistributionQuestions().map(question => {
+    const reportQuestion = getReportDistributionQuestion_(question);
+    return {
+      question: reportQuestion,
+      items: Statistics.calculateDistribution(
+        getReportDistributionRows_(yearLabel, reportQuestion, rows, headers),
+        headers,
+        reportQuestion
+      )
+    };
+  });
 
   const topAnswerFrequencies = Questions.getTopAnswerQuestions().map(question => ({
     question: question,
@@ -69,6 +101,19 @@ function computeReportMetrics_(yearLabel, rows, headers) {
     topAnswerFrequencies: topAnswerFrequencies,
     topAnswers: topAnswers
   };
+
+}
+
+/** Чистая сборка знаменателя и явки одного года для reportData. */
+function calculateResponseRateForYear_(year, yearSample, filters) {
+
+  const invited = Headcount.invitedForFilters(year, filters);
+  const headcount = invited.supported ? invited.count : null;
+  const responseRatePercent = yearSample && invited.supported && invited.count
+    ? MathStats.round(yearSample.rows.length / invited.count * 100, 1)
+    : null;
+
+  return { headcount: headcount, responseRatePercent: responseRatePercent };
 
 }
 
@@ -93,7 +138,7 @@ function buildCohortReport_(source, filters, customReportName) {
   }
 
   const survey = loadEnrichedSurveyData_('2026', true);
-  const filteredNow = FilterEngine.applyFilters(survey.data, survey.headers, filters);
+  const filteredNow = FilterEngine.applyFilters(survey.data, survey.headers, filters, "2026");
 
   let survey2025;
 
@@ -103,7 +148,7 @@ function buildCohortReport_(source, filters, customReportName) {
     throw new Error("Не удалось построить когортный отчет: " + error.message);
   }
 
-  const filteredBefore = FilterEngine.applyFilters(survey2025.data, survey2025.headers, filters);
+  const filteredBefore = FilterEngine.applyFilters(survey2025.data, survey2025.headers, filters, "2025");
 
   const matched = Cohort.build(filteredNow, filteredBefore, survey.headers, survey2025.headers);
 
@@ -148,6 +193,10 @@ function buildCohortReport_(source, filters, customReportName) {
     enps: metricsNow.enps,
     enpsByYear: { '2026': metricsNow.enps, '2025': metricsBefore.enps },
     employeesByYear: { '2026': matched.size, '2025': matched.size },
+    // Когорта — не все заполнившие анкету, поэтому делить ее размер на
+    // численность приглашенных и называть результат явкой нельзя.
+    headcountByYear: { '2026': null, '2025': null },
+    responseRateByYear: { '2026': null, '2025': null },
     averageRatings: metricsNow.averageRatings,
     distributions: metricsNow.distributions,
     topAnswers: metricsNow.topAnswers,
@@ -156,7 +205,8 @@ function buildCohortReport_(source, filters, customReportName) {
     comparison: comparison,
     cohortOnly: true,
     cohortInfo: cohortInfo,
-    cohortRoster: roster
+    cohortRoster: roster,
+    segmentContext: SegmentContext.forFilters('2026', filters)
   };
 
   const sheet = ReportBuilder.createReport(reportData, reportName, isCustomName);
@@ -226,31 +276,45 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
   const filteredData = FilterEngine.applyFilters(
     survey.data,
     survey.headers,
-    filters
+    filters,
+    source
   );
 
   // ==========================================================
   // Рассчитываем статистику
   // ==========================================================
 
+  // Численность (N) для поправки на конечную совокупность (FPC, см.
+  // MathStats.finitePopulationCorrection) — та же численность, что
+  // используется ниже для явки (calculateResponseRateForYear_).
+  // null, если текущий набор фильтров не сводится к одному отделу/
+  // управлению/группе команд (Headcount.invitedForFilters) — тогда
+  // ДИ считается без поправки, как раньше.
+  const sourceHeadcount = calculateResponseRateForYear_(source, { rows: filteredData }, filters).headcount;
+
   const enps = Statistics.calculateENPS(
     filteredData,
-    survey.headers
+    survey.headers,
+    sourceHeadcount
   );
 
   const averageRatings = Statistics.calculateAverageRatings(
     filteredData,
-    survey.headers
+    survey.headers,
+    sourceHeadcount
   );
 
-  const distributions = Questions.getDistributionQuestions().map(question => ({
-    question: question,
-    items: Statistics.calculateDistribution(
-      getReportDistributionRows_(source, question, filteredData, survey.headers),
-      survey.headers,
-      question
-    )
-  }));
+  const distributions = Questions.getDistributionQuestions().map(question => {
+    const reportQuestion = getReportDistributionQuestion_(question);
+    return {
+      question: reportQuestion,
+      items: Statistics.calculateDistribution(
+        getReportDistributionRows_(source, reportQuestion, filteredData, survey.headers),
+        survey.headers,
+        reportQuestion
+      )
+    };
+  });
 
   // Полные (неусеченные) частоты ответов на открытые вопросы считаются
   // ОДИН раз и служат единственным источником и для Топ-5, и для
@@ -296,7 +360,7 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
 
       samplesByYear[year] = {
         headers: yearSurvey.headers,
-        rows: FilterEngine.applyFilters(yearSurvey.data, yearSurvey.headers, filters)
+        rows: FilterEngine.applyFilters(yearSurvey.data, yearSurvey.headers, filters, year)
       };
 
     }
@@ -318,6 +382,8 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
 
   const enpsByYear = {};
   const employeesByYear = {};
+  const headcountByYear = {};
+  const responseRateByYear = {};
 
   REPORT_YEARS.forEach(year => {
 
@@ -339,9 +405,13 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
 
     employeesByYear[year] = yearSample ? yearSample.rows.length : null;
 
+    const coverage = calculateResponseRateForYear_(year, yearSample, filters);
+    headcountByYear[year] = coverage.headcount;
+    responseRateByYear[year] = coverage.responseRatePercent;
+
     enpsByYear[year] = (year === source)
       ? enps
-      : (yearSample ? Statistics.calculateENPS(yearSample.rows, yearSample.headers) : null);
+      : (yearSample ? Statistics.calculateENPS(yearSample.rows, yearSample.headers, headcountByYear[year]) : null);
 
   });
 
@@ -362,14 +432,17 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
 
     const filteredData2025 = sample2025.rows;
 
-    const distributions2025 = Questions.getDistributionQuestions().map(question => ({
-      question: question,
-      items: Statistics.calculateDistribution(
-        getReportDistributionRows_('2025', question, filteredData2025, sample2025.headers),
-        sample2025.headers,
-        question
-      )
-    }));
+    const distributions2025 = Questions.getDistributionQuestions().map(question => {
+      const reportQuestion = getReportDistributionQuestion_(question);
+      return {
+        question: reportQuestion,
+        items: Statistics.calculateDistribution(
+          getReportDistributionRows_('2025', reportQuestion, filteredData2025, sample2025.headers),
+          sample2025.headers,
+          reportQuestion
+        )
+      };
+    });
 
     // Полные (неусеченные) частоты для вопросов Топ-5 — сравнение
     // должно строиться по ним, а не по уже обрезанным до 5 позиций
@@ -390,7 +463,8 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
     // посчитаны выше и передаются готовыми, как и eNPS обоих годов.
     const averageRatings2025 = Statistics.calculateAverageRatings(
       filteredData2025,
-      sample2025.headers
+      sample2025.headers,
+      headcountByYear['2025']
     );
 
     comparison = Comparison.build(
@@ -407,7 +481,9 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
       distributions,
       distributions2025,
       topAnswerFrequencies,
-      topAnswerFrequencies2025
+      topAnswerFrequencies2025,
+      headcountByYear['2026'],
+      headcountByYear['2025']
     );
 
   }
@@ -442,12 +518,18 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
     // (employees/enps) и динамику из comparison. Год без данных — null.
     enpsByYear: enpsByYear,
     employeesByYear: employeesByYear,
+    // Число приглашенных и доля заполнивших для каждого года. Значение
+    // null означает, что на листе нет численности этого года либо
+    // активный фильтр требует неизвестного знаменателя (например город).
+    headcountByYear: headcountByYear,
+    responseRateByYear: responseRateByYear,
     averageRatings: averageRatings,
     distributions: distributions,
     topAnswers: topAnswers,
     headers: survey.headers,
     filteredRows: filteredData,
-    comparison: comparison
+    comparison: comparison,
+    segmentContext: SegmentContext.forFilters(source, filters)
   };
 
   const sheet = ReportBuilder.createReport(reportData, reportName, isCustomName);
@@ -475,6 +557,8 @@ function buildReport(source, filters, compareWith2025, customReportName, cohortO
     filters: filters,
     sheetName: sheet.getName(),
     comparison: comparison,
+    headcount: headcountByYear[source],
+    responseRatePercent: responseRateByYear[source],
     summaryError: summaryError
   };
 

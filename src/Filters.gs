@@ -39,16 +39,33 @@ const Filters = {
    * из фактических непустых значений листа "перформанс" (см.
    * PerformanceDirectory.distinctValues).
    */
-  getValueOptions(question, headers, data) {
+  getValueOptions(question, headers, data, source) {
 
     if (this.isDynamicPerformanceQuestion(question)) {
       return PerformanceDirectory.distinctValues(question.title);
     }
 
-    const options = question.answers || [];
+    let options = question.answers || [];
+
+    if (question.title === "Управление" && source && source !== "both") {
+      options = Headcount.listDivisions(source).concat([Headcount.UNASSIGNED_LABEL]);
+    } else if (question.title === "Группа команд" && source && source !== "both") {
+      // Только реально существующие непустые группы (Управление + Тип
+      // команды) этого года — без искусственного варианта "не указано"
+      // (см. Headcount.listTeamGroups).
+      options = Headcount.listTeamGroups(source);
+    } else if (question.title === "Отдел" && source && source !== "both") {
+      // Название из многолетнего справочника ставится первым: если
+      // каталог анкеты ещё содержит старый вариант того же ID, в UI
+      // должно остаться последнее фактическое название.
+      options = Headcount.listDepartments(source).concat(options);
+      options = options.filter((value, index, list) =>
+        list.findIndex(candidate => Headcount.departmentKey(candidate) === Headcount.departmentKey(value)) === index
+      );
+    }
 
     if (this.isFrequencySorted(question) && headers && data) {
-      return this.sortOptionsByFrequency(options, question.title, headers, data);
+      return this.sortOptionsByFrequency(options, question.title, headers, data, source);
     }
 
     return options;
@@ -78,9 +95,10 @@ const Filters = {
    * ищем колонку "Отдел" и переводим каждое значение в управление
    * перед подсчетом.
    */
-  sortOptionsByFrequency(options, questionTitle, headers, data) {
+  sortOptionsByFrequency(options, questionTitle, headers, data, source) {
 
     const isDivision = questionTitle === "Управление";
+    const headcountYear = source === "both" ? Headcount.INITIAL_YEAR : source;
     const lookupTitle = isDivision ? "Отдел" : questionTitle;
     const target = String(lookupTitle).trim().toLowerCase().replace(/\s+/g, " ");
     const columnIndex = headers.findIndex(
@@ -102,9 +120,11 @@ const Filters = {
       }
 
       const key = isDivision
-        ? String(Headcount.divisionOf(DepartmentAliases.canonicalize(raw)) || Headcount.UNASSIGNED_LABEL)
+        ? String(Headcount.divisionOf(headcountYear, raw) || Headcount.UNASSIGNED_LABEL)
             .trim().toLowerCase().replace(/\s+/g, " ")
-        : String(raw).trim().toLowerCase().replace(/\s+/g, " ");
+        : questionTitle === "Отдел" && source
+          ? Headcount.departmentKey(raw)
+          : String(raw).trim().toLowerCase().replace(/\s+/g, " ");
 
       counts[key] = (counts[key] || 0) + 1;
 
@@ -112,8 +132,14 @@ const Filters = {
 
     return options.slice().sort((a, b) => {
 
-      const countA = counts[a.trim().toLowerCase().replace(/\s+/g, " ")] || 0;
-      const countB = counts[b.trim().toLowerCase().replace(/\s+/g, " ")] || 0;
+      const keyA = questionTitle === "Отдел" && source
+        ? Headcount.departmentKey(a)
+        : a.trim().toLowerCase().replace(/\s+/g, " ");
+      const keyB = questionTitle === "Отдел" && source
+        ? Headcount.departmentKey(b)
+        : b.trim().toLowerCase().replace(/\s+/g, " ");
+      const countA = counts[keyA] || 0;
+      const countB = counts[keyB] || 0;
 
       if (countB !== countA) {
         return countB - countA;

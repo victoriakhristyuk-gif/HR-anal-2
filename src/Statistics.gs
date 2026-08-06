@@ -17,7 +17,7 @@ const Statistics = {
    * а Number("") === 0, из-за чего пустая ячейка eNPS молча считалась
    * критиком. Scoring.vector корректно возвращает для нее null.
    */
-  calculateENPS(rows, headers) {
+  calculateENPS(rows, headers, populationSize) {
 
     const enpsQuestion = Questions.getAll().find(question => question.type === "enps");
 
@@ -45,7 +45,7 @@ const Statistics = {
     });
 
     const total = promoters + neutrals + detractors;
-    const ci = total ? MathStats.enpsConfidence(promoters, detractors, total) : null;
+    const ci = total ? MathStats.enpsConfidence(promoters, detractors, total, populationSize) : null;
 
     return {
       promoters,
@@ -70,7 +70,7 @@ const Statistics = {
   /**
    * Средние оценки
    */
-  calculateAverageRatings(rows, headers) {
+  calculateAverageRatings(rows, headers, populationSize) {
 
     const questions = Questions.getAverageQuestions();
     const result = [];
@@ -112,12 +112,14 @@ const Statistics = {
       // чтобы отличить драматичный, но статистически шумный сдвиг
       // среднего балла от реального изменения.
       const stats = MathStats.describe(values);
+      const ci = MathStats.meanConfidence(stats.mean, stats.variance, stats.n, populationSize);
 
       result.push({
         question: question.title,
         average: stats.n ? +(stats.mean).toFixed(2) : 0,
         count: stats.n,
-        variance: stats.variance
+        variance: stats.variance,
+        ciMargin: ci.margin !== null ? MathStats.round(ci.margin, 2) : null
       });
 
     });

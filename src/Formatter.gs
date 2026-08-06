@@ -222,6 +222,21 @@ const Formatter = {
   },
 
   /**
+   * Ячейка свободного текста (паспорт выборки, Short Summary, контекст
+   * по компании и т.п.), длина которого заранее не известна — вместо
+   * того чтобы текст визуально наезжал на пустые соседние колонки,
+   * объединяет строку на всю ширину контента отчета и включает перенос
+   * по словам. Merge выполняется ДО setValue (см. Formatter.writeGlossaryBlock) —
+   * иначе Sheets предупреждает о потере значений в схлопываемых ячейках.
+   */
+  wrapTextRow(sheet, row, numCols) {
+    const range = sheet.getRange(row, 1, 1, numCols || 6);
+    range.mergeAcross();
+    range.setWrap(true).setVerticalAlignment("top");
+    return range;
+  },
+
+  /**
    * Подсказка при наведении на ячейку — тонкая обертка над setNote
    * для единообразия вызовов (см. Glossary.gs — тексты подсказок).
    */

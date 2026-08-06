@@ -45,7 +45,42 @@ function testManagerTeamReport_runAll() {
     testManagerTeamReport_burnoutEmptyCellIsSkippedQuestion_,
     testManagerTeamReport_burnoutUnrecognizedTextIsFlagged_,
     testManagerTeamReport_burnoutFixDoesNotAffectOtherQuestions_,
-    testManagerTeamReport_notUsedAnswerGetsOwnStatus_
+    testManagerTeamReport_notUsedAnswerGetsOwnStatus_,
+
+    // Свернутый список: сортировка тем внутри отдела по |расхождение|
+    testManagerTeamReport_questionsSortedByAbsDiffDescending_,
+    testManagerTeamReport_questionsSamePositiveAndNegativeDiffTieByOriginalOrder_,
+    testManagerTeamReport_questionsZeroDiffAfterNonZero_,
+    testManagerTeamReport_questionsWithoutNumericDiffGoLast_,
+    testManagerTeamReport_questionsWithoutNumericDiffPreserveOriginalOrderBetweenThemselves_,
+
+    // Свернутый список: "Кто оценивает выше"
+    testManagerTeamReport_whoScoresHigherManager_,
+    testManagerTeamReport_whoScoresHigherTeam_,
+    testManagerTeamReport_whoScoresHigherEqual_,
+    testManagerTeamReport_whoScoresHigherEmptyWhenNoNumericComparison_,
+
+    // Итоговая строка отдела: "Кто в целом оценивает выше" (overallWhoScoresHigherFor_)
+    testManagerTeamReport_overallWhoScoresHigherManager_,
+    testManagerTeamReport_overallWhoScoresHigherTeam_,
+    testManagerTeamReport_overallWhoScoresHigherEqualWithinThreshold_,
+    testManagerTeamReport_overallWhoScoresHigherInsufficientWhenNoComparableTopics_,
+    testManagerTeamReport_overallWhoScoresHigherIgnoresTopicsWithMissingScore_,
+    testManagerTeamReport_overallWhoScoresHigherIsUsedInSummaryRow_,
+
+    // Свернутый список: significantCount/matchedCount/hasComparison отдела
+    testManagerTeamReport_significantCountUsesExistingThresholdNotAnyNonZeroDiff_,
+    testManagerTeamReport_departmentWithoutComparisonIsNotZeroSignificant_,
+
+    // Свернутый список: сортировка отделов
+    testManagerTeamReport_departmentsSortedBySignificantCountDescending_,
+    testManagerTeamReport_departmentsTieBySignificantCountKeepOriginalOrder_,
+    testManagerTeamReport_departmentWithoutSignificantAfterDepartmentsWithSignificant_,
+    testManagerTeamReport_departmentWithoutComparisonAfterDepartmentsWithResult_,
+
+    // Свернутый список: краевые случаи
+    testManagerTeamReport_singleQuestionDepartmentBuildsWithoutError_,
+    testManagerTeamReport_departmentWithoutComparableQuestionsBuildsWithoutError_
   ];
 
   const failures = [];
@@ -309,10 +344,13 @@ function testManagerTeamReport_teamSizeN0_() {
 
 /**
  * n=1 — маленькая команда больше не исключается: средняя и разница
- * считаются, но статус явно предупреждает "очень мало данных" (и,
- * содержательно, средняя команды здесь буквально равна ответу этого
- * одного сотрудника — отсюда требование об ограниченном доступе к
- * листу, см. write()).
+ * считаются. Команда из 1 человека, ответившего на опрос — это ВСЯ
+ * команда (доля 100% >= TEAM_COVERAGE_OK_RATIO), поэтому статус —
+ * STATUS.OK, а не отдельная метка "мало данных" (та теперь появляется
+ * только когда ответила МЕНЬШАЯ часть команды, см.
+ * testManagerTeamReport_partialTeamResponse_). Содержательно средняя
+ * команды здесь буквально равна ответу этого одного сотрудника —
+ * отсюда требование об ограниченном доступе к листу, см. write().
  */
 function testManagerTeamReport_teamSizeN1_() {
 
@@ -327,7 +365,8 @@ function testManagerTeamReport_teamSizeN1_() {
   const zpRow = results[0].questions.find(q => q.question === "ЗП");
 
   assertMTREquals_(zpRow.teamN, 1, "команда — 1 ответивший");
-  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.VERY_LOW_TEAM, "статус — очень мало данных");
+  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.OK,
+    "1 из 1 — вся команда ответила, статус «достаточно данных»");
   assertMTREquals_(zpRow.teamLevel, MathStats.round(Norms.normalizeLevel(3, 1, 5), 1),
     "средняя команды равна ответу единственного сотрудника");
   assertMTRTrue_(zpRow.diff !== null, "разница считается даже при n=1");
@@ -349,7 +388,7 @@ function testManagerTeamReport_teamSizeN2_() {
   const zpRow = results[0].questions.find(q => q.question === "ЗП");
 
   assertMTREquals_(zpRow.teamN, 2, "команда — 2 ответивших");
-  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.VERY_LOW_TEAM, "n=2 — верхняя граница «очень мало данных»");
+  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.OK, "2 из 2 — вся команда ответила");
   assertMTRTrue_(zpRow.teamLevel !== null, "средняя считается");
   assertMTRTrue_(zpRow.diff !== null, "разница считается");
 
@@ -370,7 +409,7 @@ function testManagerTeamReport_teamSizeN3_() {
   const zpRow = results[0].questions.find(q => q.question === "ЗП");
 
   assertMTREquals_(zpRow.teamN, 3, "команда — 3 ответивших");
-  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.LOW_TEAM, "n=3 — нижняя граница «мало данных»");
+  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.OK, "3 из 3 — вся команда ответила");
   assertMTRTrue_(zpRow.teamLevel !== null, "средняя считается");
   assertMTRTrue_(zpRow.diff !== null, "разница считается");
 
@@ -392,9 +431,39 @@ function testManagerTeamReport_teamSizeN4_() {
   const zpRow = results[0].questions.find(q => q.question === "ЗП");
 
   assertMTREquals_(zpRow.teamN, 4, "команда — 4 ответивших");
-  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.LOW_TEAM, "n=4 — верхняя граница «мало данных»");
+  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.OK, "4 из 4 — вся команда ответила");
   assertMTRTrue_(zpRow.teamLevel !== null, "средняя считается");
   assertMTRTrue_(zpRow.diff !== null, "разница считается");
+
+}
+
+/**
+ * Доля команды (не абсолютное n) определяет статус — задача 5
+ * методики: 4 из 40 это четыре человека, а не «полная команда»,
+ * несмотря на то, что абсолютное n такое же, как в testTeamSizeN4_
+ * (где 4 из 4 — это 100% команды).
+ */
+function testManagerTeamReport_partialTeamResponse_() {
+
+  const department = "Отдел частичного ответа";
+  const rows = [mtrRow_("Руководитель Один", department, "5", "10")];
+
+  for (let i = 1; i <= 4; i++) {
+    rows.push(mtrRow_("Отвечающий " + i, department, "3", "7"));
+  }
+  for (let i = 5; i <= 40; i++) {
+    // Не отвечали на "ЗП" (пустая ячейка) — попадают в teamRows (учтены
+    // в teamSize), но не в teamN этого вопроса.
+    rows.push(mtrRow_("Молчащий " + i, department, "", "7"));
+  }
+
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+  const results = ManagerTeamReport.build(MTR_HEADERS_, rows, directory);
+  const zpRow = results[0].questions.find(q => q.question === "ЗП");
+
+  assertMTREquals_(zpRow.teamN, 4, "на «ЗП» ответили 4 человека");
+  assertMTREquals_(zpRow.status, "ответили 4 из 40",
+    "доля 10% — статус называет обе цифры, а не «мало данных»");
 
 }
 
@@ -608,17 +677,18 @@ function testManagerTeamReport_writeUsesBatchSetBackgrounds_() {
     ["Сотрудник 2", "Отдел разработки сайтов", "4", "8"]
   ];
 
-  const originalSheetFn = AnalyticsWriter.sheet_;
+  const originalSheetFn = ManagerTeamReport.sheet_;
   const originalWriteSheetIntro = Formatter.writeSheetIntro;
   const originalDump = AnalyticsWriter.dump_;
+  const originalDivisionOf = Headcount.divisionOf;
 
   const calls = { setBackground: 0, setBackgrounds: 0, backgroundsArg: null };
 
   // fakeRange поддерживает fluent-цепочки, которые write() вызывает для
   // заголовка блока-обзора (setValue/setFontWeight/setFontSize/
-  // mergeAcross) и самого блока (setValues) — тест интересуется только
-  // тем, что раскраска статуса идет одним setBackgrounds(), а не
-  // построчным setBackground().
+  // mergeAcross), самого блока (setValues) и группировки строк
+  // (shiftRowGroupDepth) — тест интересуется только тем, что раскраска
+  // статуса идет одним setBackgrounds(), а не построчным setBackground().
   const fakeRange = {
     setBackground() { calls.setBackground++; return fakeRange; },
     setBackgrounds(values) { calls.setBackgrounds++; calls.backgroundsArg = values; return fakeRange; },
@@ -629,11 +699,24 @@ function testManagerTeamReport_writeUsesBatchSetBackgrounds_() {
     setFontColor() { return fakeRange; },
     setVerticalAlignment() { return fakeRange; },
     setWrap() { return fakeRange; },
-    mergeAcross() { return fakeRange; }
+    setNote() { return fakeRange; },
+    mergeAcross() { return fakeRange; },
+    shiftRowGroupDepth() { return fakeRange; }
+  };
+
+  // fakeRangeList поддерживает цепочку, которой write() форматирует
+  // итоговые строки отделов (getRangeList(...).setFontWeight()....).
+  const fakeRangeList = {
+    setFontWeight() { return fakeRangeList; },
+    setBackground() { return fakeRangeList; },
+    setBorder() { return fakeRangeList; }
   };
 
   const fakeSheet = {
     getRange() { return fakeRange; },
+    getRangeList() { return fakeRangeList; },
+    getRowGroup() { return null; },
+    setRowGroupControlPosition() {},
     setHiddenGridlines() {},
     hideColumns() {},
     setColumnWidth() {},
@@ -641,9 +724,10 @@ function testManagerTeamReport_writeUsesBatchSetBackgrounds_() {
     setFrozenRows() {}
   };
 
-  AnalyticsWriter.sheet_ = function () { return fakeSheet; };
+  ManagerTeamReport.sheet_ = function () { return fakeSheet; };
   Formatter.writeSheetIntro = function () { return 1; };
   AnalyticsWriter.dump_ = function (sheet, header, rows) { return rows.length; };
+  Headcount.divisionOf = function () { return "Тестовое управление"; };
 
   try {
 
@@ -656,9 +740,10 @@ function testManagerTeamReport_writeUsesBatchSetBackgrounds_() {
     assertMTRTrue_(Array.isArray(calls.backgroundsArg), "аргумент setBackgrounds — массив цветов");
 
   } finally {
-    AnalyticsWriter.sheet_ = originalSheetFn;
+    ManagerTeamReport.sheet_ = originalSheetFn;
     Formatter.writeSheetIntro = originalWriteSheetIntro;
     AnalyticsWriter.dump_ = originalDump;
+    Headcount.divisionOf = originalDivisionOf;
   }
 
 }
@@ -787,12 +872,14 @@ function testManagerTeamReport_bothLowIsSharedConcern_() {
 }
 
 /**
- * Маленькая команда (n=2, меньше MIN_TEAM_SIZE) больше не исключается
- * из сравнения — средняя, разница и текстовая интерпретация команды
- * считаются и показываются, — но в колонку "Интерпретация"/приоритет
- * это не попадает как уверенный автоматический вывод: там сохраняется
- * консервативное "Недостаточно данных" ровно потому, что статус
- * надежности ниже STATUS.OK (см. interpretationFor_/priorityFor_).
+ * Команда, где на конкретный вопрос ответила МЕНЬШАЯ часть (не малая
+ * команда как таковая — см. testManagerTeamReport_teamSizeN2_, где
+ * n=2 из 2 — это полная команда и статус OK). Средняя, разница и
+ * текстовая интерпретация команды считаются и показываются, но в
+ * колонку "Интерпретация"/приоритет это не попадает как уверенный
+ * автоматический вывод: там сохраняется консервативное "Недостаточно
+ * данных" ровно потому, что статус надежности ниже STATUS.OK (см.
+ * interpretationFor_/priorityFor_).
  */
 function testManagerTeamReport_smallTeamIsInsufficientData_() {
 
@@ -802,16 +889,22 @@ function testManagerTeamReport_smallTeamIsInsufficientData_() {
     mtrRow_("Сотрудник 1", department, "4", "8"),
     mtrRow_("Сотрудник 2", department, "4", "8")
   ];
+  // 8 сотрудников не ответили на "ЗП" (пустая ячейка) — учтены в
+  // teamSize (teamRows.length=10), но не в teamN этого вопроса (2).
+  // Доля 2/10=20% ниже TEAM_COVERAGE_OK_RATIO, и n=2 ниже MIN_TEAM_SIZE.
+  for (let i = 3; i <= 10; i++) {
+    rows.push(mtrRow_("Сотрудник " + i, department, "", "8"));
+  }
   const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
 
   const results = ManagerTeamReport.build(MTR_HEADERS_, rows, directory);
   const zpRow = results[0].questions.find(q => q.question === "ЗП");
 
-  assertMTREquals_(zpRow.status, ManagerTeamReport.STATUS.VERY_LOW_TEAM, "статус — очень мало данных (n=2)");
-  assertMTRTrue_(zpRow.teamLevel !== null, "средняя команды теперь показывается даже при маленькой команде");
-  assertMTRTrue_(zpRow.diff !== null, "разница считается даже при маленькой команде");
+  assertMTREquals_(zpRow.status, "ответили 2 из 10", "статус называет обе цифры, а не «мало данных»");
+  assertMTRTrue_(zpRow.teamLevel !== null, "средняя команды теперь показывается даже при маленькой доле ответивших");
+  assertMTRTrue_(zpRow.diff !== null, "разница считается даже при маленькой доле ответивших");
   assertMTREquals_(zpRow.interpretation, ManagerTeamReport.INTERPRETATION.INSUFFICIENT,
-    "автоматический вывод остается консервативным — маленькая команда не дает уверенного вывода");
+    "автоматический вывод остается консервативным — малая доля ответивших не дает уверенного вывода");
   assertMTREquals_(zpRow.priority, ManagerTeamReport.PRIORITY.LOW, "приоритет низкий при недостатке данных");
   assertMTRTrue_(zpRow.managerText !== null, "ответ руководителя переводится в текст — он ответил");
   assertMTRTrue_(zpRow.teamText !== null, "текстовая интерпретация команды теперь тоже показывается");
@@ -1087,5 +1180,561 @@ function testManagerTeamReport_notUsedAnswerGetsOwnStatus_() {
   assertMTREquals_(row.interpretation, ManagerTeamReport.INTERPRETATION.INSUFFICIENT,
     "не попадает в автоматическую интерпретацию");
   assertMTREquals_(row.priority, ManagerTeamReport.PRIORITY.LOW, "не попадает в приоритет");
+
+}
+
+// ==========================================================
+// Свернутый список — сортировка тем внутри отдела по |расхождение|
+// (см. compareQuestionsByAbsDiff_ в ManagerTeamReport.gs). Фикстуры ниже
+// используют только "ЗП" и "Рабочий стол" — обе rating5 (шкала 1-5) —
+// остальные вопросы каталога (Questions.getAll()) не имеют колонки в
+// headers и поэтому автоматически получают diff === null
+// (STATUS.MANAGER_SKIPPED_QUESTION), что удобно для проверки "темы без
+// числового сравнения уходят в конец".
+// ==========================================================
+
+const MTR_SORT_HEADERS_ = ["Фамилия Имя", "Отдел", "ЗП", "Рабочий стол", "Рабочее кресло"];
+
+function mtrSortRow_(name, department, zp, desk, chair) {
+  return [name, department, zp, desk, chair];
+}
+
+/**
+ * "ЗП" получает |diff| = 100 (руководитель 1 → уровень 0, команда 5 →
+ * уровень 100), "Рабочий стол" — |diff| = 25 (руководитель 5 → 100,
+ * команда 4 → 75). Больший модуль расхождения должен идти первым.
+ */
+function testManagerTeamReport_questionsSortedByAbsDiffDescending_() {
+
+  const department = "Отдел сортировки по модулю";
+  const rows = [
+    mtrSortRow_("Руководитель Один", department, "1", "5", "3"),
+    mtrSortRow_("Сотрудник 1", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 2", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 3", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 4", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 5", department, "5", "4", "3")
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+  const questions = results[0].questions;
+
+  const zpIndex = questions.findIndex(q => q.question === "ЗП");
+  const deskIndex = questions.findIndex(q => q.question === "Рабочий стол");
+
+  assertMTREquals_(Math.abs(questions[zpIndex].diff), 100, "модуль расхождения «ЗП» — 100");
+  assertMTREquals_(Math.abs(questions[deskIndex].diff), 25, "модуль расхождения «Рабочий стол» — 25");
+  assertMTRTrue_(zpIndex < deskIndex, "тема с большим |расхождение| («ЗП») идет раньше «Рабочий стол»");
+
+}
+
+/**
+ * Положительная и отрицательная разница с одинаковым модулем (|+25| и
+ * |−25|) сортируются одинаково — при равенстве модулей темы остаются в
+ * исходном порядке анкеты ("Рабочий стол" — колонка F, раньше "ЗП" —
+ * колонка AA в Questions.gs).
+ */
+function testManagerTeamReport_questionsSamePositiveAndNegativeDiffTieByOriginalOrder_() {
+
+  const department = "Отдел равных модулей";
+  const rows = [
+    // "Рабочий стол": руководитель 5 (100) — команда 4 (75) → diff = +25
+    // "ЗП": руководитель 1 (0) — команда 2 (25) → diff = -25
+    mtrSortRow_("Руководитель Один", department, "1", "5", "3"),
+    mtrSortRow_("Сотрудник 1", department, "2", "4", "3"),
+    mtrSortRow_("Сотрудник 2", department, "2", "4", "3"),
+    mtrSortRow_("Сотрудник 3", department, "2", "4", "3"),
+    mtrSortRow_("Сотрудник 4", department, "2", "4", "3"),
+    mtrSortRow_("Сотрудник 5", department, "2", "4", "3")
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+  const questions = results[0].questions;
+
+  const zpRow = questions.find(q => q.question === "ЗП");
+  const deskRow = questions.find(q => q.question === "Рабочий стол");
+
+  assertMTREquals_(zpRow.diff, -25, "«ЗП»: разница -25");
+  assertMTREquals_(deskRow.diff, 25, "«Рабочий стол»: разница +25");
+
+  const zpIndex = questions.indexOf(zpRow);
+  const deskIndex = questions.indexOf(deskRow);
+
+  assertMTRTrue_(deskIndex < zpIndex,
+    "одинаковый модуль (25) — порядок как в анкете: «Рабочий стол» (колонка F) раньше «ЗП» (колонка AA)");
+
+}
+
+/**
+ * Тема с нулевым расхождением (руководитель и команда совпадают) идет
+ * после тем с ненулевым расхождением, но раньше тем без числового
+ * сравнения вовсе.
+ */
+function testManagerTeamReport_questionsZeroDiffAfterNonZero_() {
+
+  const department = "Отдел нулевого расхождения";
+  const rows = [
+    // "Рабочее кресло": и руководитель, и вся команда — 3 → diff = 0
+    // "ЗП": руководитель 1 (0) — команда 5 (100) → diff = -100
+    mtrSortRow_("Руководитель Один", department, "1", "3", "3"),
+    mtrSortRow_("Сотрудник 1", department, "5", "3", "3"),
+    mtrSortRow_("Сотрудник 2", department, "5", "3", "3"),
+    mtrSortRow_("Сотрудник 3", department, "5", "3", "3"),
+    mtrSortRow_("Сотрудник 4", department, "5", "3", "3"),
+    mtrSortRow_("Сотрудник 5", department, "5", "3", "3")
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+  const questions = results[0].questions;
+
+  const zpIndex = questions.findIndex(q => q.question === "ЗП");
+  const chairIndex = questions.findIndex(q => q.question === "Рабочее кресло");
+  const firstNullIndex = questions.findIndex(q => q.diff === null);
+
+  assertMTREquals_(questions[chairIndex].diff, 0, "«Рабочее кресло»: разница 0");
+  assertMTRTrue_(zpIndex < chairIndex, "ненулевое расхождение («ЗП») идет раньше нулевого («Рабочее кресло»)");
+  assertMTRTrue_(chairIndex < firstNullIndex, "нулевое расхождение идет раньше тем без числового сравнения");
+
+}
+
+/**
+ * Темы, для которых числовое сравнение невозможно (руководитель не
+ * ответил, колонки нет в источнике и т.п. — diff === null), размещаются
+ * после всех тем с рассчитанным числовым расхождением.
+ */
+function testManagerTeamReport_questionsWithoutNumericDiffGoLast_() {
+
+  const department = "Отдел без сравнения в хвосте";
+  const rows = [
+    mtrSortRow_("Руководитель Один", department, "1", "5", "3"),
+    mtrSortRow_("Сотрудник 1", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 2", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 3", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 4", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 5", department, "5", "4", "3")
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+  const questions = results[0].questions;
+
+  const lastComparableIndex = questions.reduce(
+    (lastIndex, q, i) => (q.diff !== null ? i : lastIndex), -1);
+  const firstNullIndex = questions.findIndex(q => q.diff === null);
+
+  assertMTRTrue_(firstNullIndex > lastComparableIndex,
+    "первая тема без числового сравнения идет позже последней темы с расчитанным расхождением");
+
+}
+
+/**
+ * Между темами без числового сравнения сохраняется исходный порядок
+ * анкеты (Questions.getAll()) — те же вопросы каталога, что и вне "ЗП"/
+ * "Рабочий стол"/"Рабочее кресло", в том же относительном порядке.
+ */
+function testManagerTeamReport_questionsWithoutNumericDiffPreserveOriginalOrderBetweenThemselves_() {
+
+  const department = "Отдел порядка среди пропусков";
+  const rows = [
+    mtrSortRow_("Руководитель Один", department, "1", "5", "3"),
+    mtrSortRow_("Сотрудник 1", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 2", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 3", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 4", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 5", department, "5", "4", "3")
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+  const questions = results[0].questions;
+
+  const nullTitlesInOutput = questions.filter(q => q.diff === null).map(q => q.question);
+
+  const expectedTitles = Questions.getAll()
+    .filter(q => q.report && q.type !== "text" && q.type !== "single")
+    .map(q => q.title)
+    .filter(title => title !== "ЗП" && title !== "Рабочий стол" && title !== "Рабочее кресло");
+
+  assertMTREquals_(JSON.stringify(nullTitlesInOutput), JSON.stringify(expectedTitles),
+    "темы без числового сравнения сохраняют исходный порядок анкеты между собой");
+
+}
+
+// ==========================================================
+// Свернутый список — "Кто оценивает выше" (whoScoresHigherFor_)
+// ==========================================================
+
+function testManagerTeamReport_whoScoresHigherManager_() {
+  assertMTREquals_(ManagerTeamReport.whoScoresHigherFor_(12), ManagerTeamReport.WHO_HIGHER.MANAGER,
+    "diff > 0 — числовая оценка руководителя выше");
+}
+
+function testManagerTeamReport_whoScoresHigherTeam_() {
+  assertMTREquals_(ManagerTeamReport.whoScoresHigherFor_(-12), ManagerTeamReport.WHO_HIGHER.TEAM,
+    "diff < 0 — числовая оценка команды выше");
+}
+
+function testManagerTeamReport_whoScoresHigherEqual_() {
+  assertMTREquals_(ManagerTeamReport.whoScoresHigherFor_(0), ManagerTeamReport.WHO_HIGHER.EQUAL,
+    "diff === 0 — оценки совпадают");
+}
+
+function testManagerTeamReport_whoScoresHigherEmptyWhenNoNumericComparison_() {
+  assertMTREquals_(ManagerTeamReport.whoScoresHigherFor_(null), "",
+    "diff === null — числовое сравнение невозможно, направление не выводится");
+}
+
+// ==========================================================
+// Итоговая строка отдела — "Кто в целом оценивает выше"
+// (overallWhoScoresHigherFor_) — среднее руководителя против среднего
+// команды по темам, где присутствуют обе оценки.
+// ==========================================================
+
+function testManagerTeamReport_overallWhoScoresHigherManager_() {
+  const questions = [
+    { managerLevel: 80, teamLevel: 50 },
+    { managerLevel: 70, teamLevel: 60 }
+  ];
+  assertMTREquals_(ManagerTeamReport.overallWhoScoresHigherFor_(questions), ManagerTeamReport.OVERALL_WHO_HIGHER.MANAGER,
+    "средняя руководителя (75) заметно выше средней команды (55)");
+}
+
+function testManagerTeamReport_overallWhoScoresHigherTeam_() {
+  const questions = [
+    { managerLevel: 50, teamLevel: 80 },
+    { managerLevel: 60, teamLevel: 70 }
+  ];
+  assertMTREquals_(ManagerTeamReport.overallWhoScoresHigherFor_(questions), ManagerTeamReport.OVERALL_WHO_HIGHER.TEAM,
+    "средняя команды (75) заметно выше средней руководителя (55)");
+}
+
+function testManagerTeamReport_overallWhoScoresHigherEqualWithinThreshold_() {
+  const t = ManagerTeamReport.INTERPRETATION_THRESHOLDS.SMALL_DIFF;
+  const questions = [
+    { managerLevel: 60 + t, teamLevel: 60 } // разница ровно на границе порога
+  ];
+  assertMTREquals_(ManagerTeamReport.overallWhoScoresHigherFor_(questions), ManagerTeamReport.OVERALL_WHO_HIGHER.EQUAL,
+    "расхождение в пределах существующего порога существенности (SMALL_DIFF) — считается несущественным");
+}
+
+function testManagerTeamReport_overallWhoScoresHigherInsufficientWhenNoComparableTopics_() {
+  const questions = [
+    { managerLevel: null, teamLevel: 80 },
+    { managerLevel: 70, teamLevel: null }
+  ];
+  assertMTREquals_(ManagerTeamReport.overallWhoScoresHigherFor_(questions), ManagerTeamReport.OVERALL_WHO_HIGHER.INSUFFICIENT,
+    "ни по одной теме нет одновременно обеих оценок — сравнивать нечего");
+  assertMTREquals_(ManagerTeamReport.overallWhoScoresHigherFor_([]), ManagerTeamReport.OVERALL_WHO_HIGHER.INSUFFICIENT,
+    "пустой список тем — тоже «Недостаточно данных»");
+}
+
+/**
+ * Темы без одной из оценок не участвуют в среднем и не подставляются
+ * как 0 — иначе средняя руководителя (80+0)/2=40 против команды 45 дала
+ * бы неверный знак расхождения. Правильный результат считается только
+ * по единственной полностью сравнимой теме: 80 против 50.
+ */
+function testManagerTeamReport_overallWhoScoresHigherIgnoresTopicsWithMissingScore_() {
+  const questions = [
+    { managerLevel: 80, teamLevel: 50 },
+    { managerLevel: null, teamLevel: 90 },
+    { managerLevel: 20, teamLevel: null }
+  ];
+  assertMTREquals_(ManagerTeamReport.overallWhoScoresHigherFor_(questions), ManagerTeamReport.OVERALL_WHO_HIGHER.MANAGER,
+    "темы с отсутствующей оценкой руководителя или команды исключены из среднего, а не приравнены к 0");
+}
+
+/**
+ * Интеграционная проверка: итоговая строка отдела (buildSheetRows_)
+ * берет значение из department.overallWhoScoresHigher, а не из старого
+ * текста "Руководитель ответил"/STATUS.MANAGER_DID_NOT_ANSWER.
+ * Фикстура mtrRowsFullTeam_ — руководитель заметно выше команды и по
+ * "ЗП" (100 против 70), и по "eNPS" (100 против 78).
+ */
+function testManagerTeamReport_overallWhoScoresHigherIsUsedInSummaryRow_() {
+
+  const rows = mtrRowsFullTeam_();
+  const directory = mtrDirectory_({ "Отдел разработки сайтов": ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_HEADERS_, rows, directory);
+  const department = results[0];
+
+  assertMTREquals_(department.overallWhoScoresHigher, ManagerTeamReport.OVERALL_WHO_HIGHER.MANAGER,
+    "руководитель заметно выше команды по обеим сравнимым темам");
+
+  const built = ManagerTeamReport.buildSheetRows_(results, 10);
+  const summaryRow = built.rows[0];
+
+  assertMTREquals_(summaryRow[5], ManagerTeamReport.OVERALL_WHO_HIGHER.MANAGER,
+    "итоговая строка отдела показывает итоговое резюме, а не «Руководитель ответил»");
+
+}
+
+// ==========================================================
+// Свернутый список — significantCount/matchedCount/hasComparison отдела
+// (см. build() — итоговые поля результата по отделу)
+// ==========================================================
+
+/**
+ * significantCount считает только темы со статусом OK и уже
+ * существующей интерпретацией BLIND_SPOT/MANAGER_MORE_CRITICAL — не
+ * любое ненулевое отличие. "Рабочее кресло" ниже дает небольшую
+ * ненулевую разницу (не значимую), "ЗП" — разницу > 20 при diff < -20
+ * (MANAGER_MORE_CRITICAL, значимая).
+ */
+function testManagerTeamReport_significantCountUsesExistingThresholdNotAnyNonZeroDiff_() {
+
+  const department = "Отдел порога значимости";
+  const rows = [
+    // "ЗП": руководитель 1 (0) — команда 5 (100) → diff = -100 (значимо, MANAGER_MORE_CRITICAL)
+    // "Рабочий стол": руководитель 5 (100) — команда 4.8 (95) → diff = 5 (не значимо, MATCH)
+    mtrSortRow_("Руководитель Один", department, "1", "5", "3"),
+    mtrSortRow_("Сотрудник 1", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 2", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 3", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 4", department, "5", "4", "3"),
+    mtrSortRow_("Сотрудник 5", department, "5", "5", "3")
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+  const department0 = results[0];
+
+  const zpRow = department0.questions.find(q => q.question === "ЗП");
+  const deskRow = department0.questions.find(q => q.question === "Рабочий стол");
+
+  assertMTREquals_(zpRow.interpretation, ManagerTeamReport.INTERPRETATION.MANAGER_MORE_CRITICAL,
+    "«ЗП» — существующая категория значимого расхождения");
+  assertMTRTrue_(deskRow.diff !== 0 && Math.abs(deskRow.diff) <= 10, "«Рабочий стол» — небольшая ненулевая разница");
+  assertMTREquals_(deskRow.interpretation, ManagerTeamReport.INTERPRETATION.MATCH,
+    "«Рабочий стол» — небольшая ненулевая разница не считается значимой (существующий порог SMALL_DIFF)");
+
+  assertMTREquals_(department0.significantCount, 1, "significantCount = 1 — только «ЗП», не любое ненулевое отличие");
+
+}
+
+/**
+ * Отдел, где сравнение невозможно вовсе (руководитель не участвовал в
+ * опросе — MANAGER_DID_NOT_ANSWER по всем темам), не считается отделом
+ * с нулем расхождений: hasComparison=false отдельно от significantCount=0.
+ */
+function testManagerTeamReport_departmentWithoutComparisonIsNotZeroSignificant_() {
+
+  const department = "Отдел без сравнения";
+  const rows = mtrRowsFullTeam_(department).filter(row => row[0] !== "Руководитель Один");
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  const results = ManagerTeamReport.build(MTR_HEADERS_, rows, directory);
+  const dept = results[0];
+
+  assertMTREquals_(dept.hasComparison, false, "сравнение невозможно — руководитель не ответил ни на один вопрос");
+  assertMTREquals_(dept.significantCount, 0, "significantCount формально 0 (нечего посчитать значимым)");
+  assertMTREquals_(dept.comparableCount, 0, "comparableCount = 0 — ни одной темы со статусом OK");
+
+}
+
+// ==========================================================
+// Свернутый список — сортировка отделов (compareDepartmentsBySignificance_)
+// ==========================================================
+
+/**
+ * Общая фикстура с пятью отделами для тестов сортировки отделов.
+ * Имена подобраны НАРОЧНО так, чтобы алфавитный (= исходный, см.
+ * departmentOrder.sort в build()) порядок расходился с ожидаемым
+ * порядком после сортировки по значимым расхождениям — это доказывает,
+ * что итоговый порядок действительно определяется significantCount, а
+ * не просто совпадает с уже отсортированным алфавитным списком:
+ *  - "Отдел К" — 0 значимых расхождений, но сравнение возможно
+ *    (алфавитно идет первым, но в результате должен оказаться позже
+ *    "Отдел Л"/"Отдел М");
+ *  - "Отдел Л" и "Отдел М" — по 2 значимых расхождения (тай-брейк —
+ *    оба через MANAGER_MORE_CRITICAL, существующая категория, а не
+ *    любое ненулевое отличие);
+ *  - "Отдел Н" — руководитель не участвовал в опросе (сравнение
+ *    невозможно вовсе);
+ *  - "Отдел О" — несколько отмеченных руководителей (ошибка).
+ */
+function mtrDepartmentSortFixture_() {
+
+  const twoSignificantRows = department => [
+    // "ЗП" и "Рабочий стол" оба дают diff < -20 (MANAGER_MORE_CRITICAL)
+    mtrSortRow_("Руководитель Один", department, "1", "1", "3"),
+    mtrSortRow_("Сотрудник 1", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 2", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 3", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 4", department, "5", "5", "3"),
+    mtrSortRow_("Сотрудник 5", department, "5", "5", "3")
+  ];
+
+  const zeroSignificantRows = department => [
+    mtrSortRow_("Руководитель Один", department, "3", "3", "3"),
+    mtrSortRow_("Сотрудник 1", department, "3", "3", "3"),
+    mtrSortRow_("Сотрудник 2", department, "3", "3", "3"),
+    mtrSortRow_("Сотрудник 3", department, "3", "3", "3"),
+    mtrSortRow_("Сотрудник 4", department, "3", "3", "3"),
+    mtrSortRow_("Сотрудник 5", department, "3", "3", "3")
+  ];
+
+  const noManagerAnswerRows = department => zeroSignificantRows(department)
+    .filter(row => row[0] !== "Руководитель Один");
+
+  const rows = [].concat(
+    zeroSignificantRows("Отдел К"),
+    twoSignificantRows("Отдел Л"),
+    twoSignificantRows("Отдел М"),
+    noManagerAnswerRows("Отдел Н")
+  ).concat([
+    mtrSortRow_("Руководитель О1", "Отдел О", "3", "3", "3"),
+    mtrSortRow_("Руководитель О2", "Отдел О", "3", "3", "3")
+  ]);
+
+  const directory = mtrDirectory_({
+    "Отдел К": ["Руководитель Один"],
+    "Отдел Л": ["Руководитель Один"],
+    "Отдел М": ["Руководитель Один"],
+    "Отдел Н": ["Руководитель Один"],
+    "Отдел О": ["Руководитель О1", "Руководитель О2"]
+  });
+
+  return ManagerTeamReport.build(MTR_SORT_HEADERS_, rows, directory);
+
+}
+
+function testManagerTeamReport_departmentsSortedBySignificantCountDescending_() {
+
+  const results = mtrDepartmentSortFixture_();
+  const names = results.map(d => d.department);
+
+  const indexK = names.indexOf("Отдел К");
+  const indexL = names.indexOf("Отдел Л");
+  const indexM = names.indexOf("Отдел М");
+
+  assertMTREquals_(results[indexL].significantCount, 2, "«Отдел Л» — 2 значимых расхождения");
+  assertMTREquals_(results[indexK].significantCount, 0, "«Отдел К» — 0 значимых расхождений");
+
+  // "Отдел К" алфавитно (= в исходных данных) идет раньше "Отдел Л"/
+  // "Отдел М", но после сортировки по значимым расхождениям должен
+  // оказаться позже них — иначе сортировка не работает, а просто
+  // копирует исходный порядок.
+  assertMTRTrue_(indexL < indexK, "отдел с большим числом значимых расхождений идет раньше отдела с 0, даже если исходно шел позже");
+  assertMTRTrue_(indexM < indexK, "то же самое для «Отдел М»");
+
+}
+
+function testManagerTeamReport_departmentsTieBySignificantCountKeepOriginalOrder_() {
+
+  const results = mtrDepartmentSortFixture_();
+  const names = results.map(d => d.department);
+
+  const indexL = names.indexOf("Отдел Л");
+  const indexM = names.indexOf("Отдел М");
+
+  assertMTREquals_(results[indexL].significantCount, results[indexM].significantCount,
+    "«Отдел Л» и «Отдел М» — одинаковое число значимых расхождений (тай-брейк)");
+  assertMTRTrue_(indexL < indexM,
+    "при равном числе значимых расхождений сохраняется исходный (алфавитный) порядок отчета: «Отдел Л» раньше «Отдел М»");
+
+}
+
+function testManagerTeamReport_departmentWithoutSignificantAfterDepartmentsWithSignificant_() {
+
+  const results = mtrDepartmentSortFixture_();
+  const names = results.map(d => d.department);
+
+  const indexM = names.indexOf("Отдел М");
+  const indexK = names.indexOf("Отдел К");
+
+  assertMTREquals_(results[indexK].significantCount, 0, "«Отдел К» — 0 значимых расхождений");
+  assertMTRTrue_(indexM < indexK, "отдел без значимых расхождений идет после отделов со значимыми расхождениями");
+
+}
+
+function testManagerTeamReport_departmentWithoutComparisonAfterDepartmentsWithResult_() {
+
+  const results = mtrDepartmentSortFixture_();
+  const names = results.map(d => d.department);
+
+  const indexK = names.indexOf("Отдел К");
+  const indexN = names.indexOf("Отдел Н");
+  const indexO = names.indexOf("Отдел О");
+
+  assertMTREquals_(results[indexN].hasComparison, false, "«Отдел Н» — сравнение невозможно (руководитель не ответил)");
+  assertMTREquals_(results[indexO].error, ManagerTeamReport.STATUS.MULTIPLE_MANAGERS, "«Отдел О» — ошибка нескольких руководителей");
+
+  assertMTRTrue_(indexK < indexN, "отдел с рассчитанным результатом (даже 0 расхождений) идет раньше отдела без сравнения");
+  assertMTRTrue_(indexK < indexO, "то же самое относительно отдела-ошибки");
+  assertMTRTrue_(indexN < indexO, "среди отделов без сравнения сохраняется исходный (алфавитный) порядок: «Отдел Н» раньше «Отдел О»");
+
+}
+
+// ==========================================================
+// Свернутый список — краевые случаи
+// ==========================================================
+
+/**
+ * Отдел с одним вопросом (все остальные вопросы каталога недоступны —
+ * колонок нет в источнике) формируется без ошибки.
+ */
+function testManagerTeamReport_singleQuestionDepartmentBuildsWithoutError_() {
+
+  const headers = ["Фамилия Имя", "Отдел", "ЗП"];
+  const department = "Отдел одного вопроса";
+  const rows = [
+    ["Руководитель Один", department, "5"],
+    ["Сотрудник 1", department, "4"],
+    ["Сотрудник 2", department, "4"],
+    ["Сотрудник 3", department, "4"],
+    ["Сотрудник 4", department, "4"],
+    ["Сотрудник 5", department, "4"]
+  ];
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  let threw = false;
+  let results;
+
+  try {
+    results = ManagerTeamReport.build(headers, rows, directory);
+  } catch (error) {
+    threw = true;
+  }
+
+  assertMTRTrue_(!threw, "build() не бросает исключение для отдела с одним доступным вопросом");
+  assertMTREquals_(results.length, 1, "отдел присутствует в результате");
+  assertMTRTrue_(results[0].questions.find(q => q.question === "ЗП") !== undefined, "«ЗП» посчитан");
+
+}
+
+/**
+ * Отдел, для которого числовое сравнение недоступно ни по одной теме
+ * (руководитель не найден среди ответов отдела), формируется без ошибки
+ * — build() и buildSheetRows_ не падают и корректно возвращают
+ * hasComparison=false, а не бросают исключение из-за отсутствия тем со
+ * статусом OK.
+ */
+function testManagerTeamReport_departmentWithoutComparableQuestionsBuildsWithoutError_() {
+
+  const department = "Отдел без доступного сравнения";
+  const rows = mtrRowsFullTeam_(department).filter(row => row[0] !== "Руководитель Один");
+  const directory = mtrDirectory_({ [department]: ["Руководитель Один"] });
+
+  let threw = false;
+  let results;
+
+  try {
+    results = ManagerTeamReport.build(MTR_HEADERS_, rows, directory);
+  } catch (error) {
+    threw = true;
+  }
+
+  assertMTRTrue_(!threw, "build() не бросает исключение, когда сравнение невозможно ни по одной теме");
+  assertMTREquals_(results.length, 1, "отдел присутствует в результате");
+  assertMTREquals_(results[0].hasComparison, false, "hasComparison=false — сравнить нечего");
+
+  const built = ManagerTeamReport.buildSheetRows_(results, 10);
+  assertMTREquals_(built.rows.length, 1 + results[0].questions.length,
+    "buildSheetRows_ не падает даже когда department.hasComparison=false — итоговая строка + все темы department");
 
 }

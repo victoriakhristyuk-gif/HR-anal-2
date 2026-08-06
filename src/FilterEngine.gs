@@ -20,13 +20,13 @@ const FilterEngine = {
    * @param {Array<Object>} filters
    * @returns {Array<Array>}
    */
-  applyFilters(data, headers, filters) {
+  applyFilters(data, headers, filters, year) {
 
     const groups = this.groupFilters(filters);
 
     return data.filter(row =>
       groups.every(group =>
-        group.some(filter => this.matchesFilter(row, headers, filter))
+        group.some(filter => this.matchesFilter(row, headers, filter, year))
       )
     );
 
@@ -69,13 +69,20 @@ const FilterEngine = {
   /**
    * Проверить одну строку на соответствие одному фильтру
    */
-  matchesFilter(row, headers, filter) {
+  matchesFilter(row, headers, filter, year) {
 
     // "Управление" — не реальная колонка анкеты: считается по отделу
     // строки через справочник численности (см. Headcount.gs), поэтому
     // обрабатывается раньше поиска колонки по имени вопроса.
     if (this.normalize(filter.question) === this.normalize("Управление")) {
-      return this.matchesDivisionFilter_(row, headers, filter);
+      return this.matchesDivisionFilter_(row, headers, filter, year);
+    }
+
+    // "Группа команд" — тоже не реальная колонка анкеты: считается по
+    // отделу строки через справочник численности (см. Headcount.gs,
+    // Headcount.teamGroupOf), как и "Управление" выше.
+    if (this.normalize(filter.question) === this.normalize("Группа команд")) {
+      return this.matchesTeamGroupFilter_(row, headers, filter, year);
     }
 
     // Сравнение без учета регистра/пробелов — те же расхождения
@@ -102,6 +109,10 @@ const FilterEngine = {
     // терминах текущего названия, молча теряет строки года, где отдел
     // назывался иначе.
     if (this.normalize(headers[columnIndex]) === this.normalize("Отдел")) {
+      if (year) {
+        const valueKey = Headcount.departmentKey(value);
+        return (filter.values || []).some(allowed => Headcount.departmentKey(allowed) === valueKey);
+      }
       return this.matchesValues(
         DepartmentAliases.canonicalize(value),
         (filter.values || []).map(v => DepartmentAliases.canonicalize(v))
@@ -115,7 +126,7 @@ const FilterEngine = {
   /**
    * Фильтр по "Управлению" — производный от "Отдел" (см. Headcount.gs).
    */
-  matchesDivisionFilter_(row, headers, filter) {
+  matchesDivisionFilter_(row, headers, filter, year) {
 
     const departmentColumnIndex = headers.findIndex(
       header => this.normalize(header) === this.normalize("Отдел")
@@ -125,10 +136,43 @@ const FilterEngine = {
       throw new Error("Не найден вопрос \"Отдел\" в данных (нужен для фильтра \"Управление\")");
     }
 
-    const canonicalDepartment = DepartmentAliases.canonicalize(row[departmentColumnIndex]);
-    const division = Headcount.divisionOf(canonicalDepartment) || Headcount.UNASSIGNED_LABEL;
+    if (!year) {
+      throw new Error('Для фильтра "Управление" не указан год источника данных');
+    }
+
+    const division = Headcount.divisionOf(year, row[departmentColumnIndex]) || Headcount.UNASSIGNED_LABEL;
 
     return this.matchesValues(division, filter.values);
+
+  },
+
+  /**
+   * Фильтр по "Группе команд" — производный от "Отдел" (см.
+   * Headcount.teamGroupOf). В отличие от "Управления" у отдела без
+   * указанного типа команды нет синтетической группы-заглушки: такой
+   * отдел никогда не совпадает ни с одним значением этого фильтра
+   * (см. заголовок Headcount.gs, правило 4 — не создавать группу
+   * "Не указано").
+   */
+  matchesTeamGroupFilter_(row, headers, filter, year) {
+
+    const departmentColumnIndex = headers.findIndex(
+      header => this.normalize(header) === this.normalize("Отдел")
+    );
+
+    if (departmentColumnIndex === -1) {
+      throw new Error("Не найден вопрос \"Отдел\" в данных (нужен для фильтра \"Группа команд\")");
+    }
+
+    if (!year) {
+      throw new Error('Для фильтра "Группа команд" не указан год источника данных');
+    }
+
+    const group = Headcount.teamGroupOf(year, row[departmentColumnIndex]);
+
+    if (!group) return false;
+
+    return this.matchesValues(group, filter.values);
 
   },
 

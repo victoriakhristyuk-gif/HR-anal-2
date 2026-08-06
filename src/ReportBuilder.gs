@@ -115,6 +115,7 @@ const ReportBuilder = {
     // ними (пустые строки внутри самих разделов не затрагиваются).
     this.renderExecutiveSummary_(ctx, reportData);
     this.renderKeyIndicators_(ctx, reportData);
+    this.renderCompanyContext_(ctx, reportData);
     this.renderDetailedAnalyticsBefore_(ctx, reportData);
     this.renderAverageOverviewSection_(ctx, reportData);
     this.renderCohortRoster_(ctx, reportData);
@@ -191,26 +192,36 @@ const ReportBuilder = {
       ? activeFilters.join("; ")
       : "без фильтров";
 
-    const sourceLineCell = sheet.getRange(ctx.row, 1);
+    const sourceLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     sourceLineCell.setValue(
       "Источник: " + reportData.source + " · Фильтры: " + filtersText
     );
     sourceLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
 
-    const sampleText = reportData.comparison
-      ? "Размер выборки: " + periods.currentYear + " — n=" + reportData.employees +
-        "; " + periods.previousYear + " — n=" + reportData.comparison.employees2025
-      : "Размер выборки: n=" + reportData.employees;
+    const formatSample = (year, employees) => {
+      const invited = reportData.headcountByYear ? reportData.headcountByYear[year] : null;
+      const rate = reportData.responseRateByYear ? reportData.responseRateByYear[year] : null;
+      return year + " — n=" + employees +
+        (invited !== null && invited !== undefined ? ", приглашены=" + invited : "") +
+        (rate !== null && rate !== undefined
+          ? ", явка=" + rate + "%" + (rate > 100 ? " ⚠ проверьте численность" : "")
+          : "");
+    };
 
-    const sampleLineCell = sheet.getRange(ctx.row, 1);
+    const sampleText = reportData.comparison
+      ? "Размер выборки: " + formatSample(periods.currentYear, reportData.employees) +
+        "; " + formatSample(periods.previousYear, reportData.comparison.employees2025)
+      : "Размер выборки: " + formatSample(periods.currentYear, reportData.employees);
+
+    const sampleLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     sampleLineCell.setValue(sampleText);
     sampleLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
 
     if (reportData.cohortOnly) {
 
-      const cohortLineCell = sheet.getRange(ctx.row, 1);
+      const cohortLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       cohortLineCell.setValue("Выборка: сквозная когорта");
       cohortLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
       ctx.row += 1;
@@ -220,7 +231,7 @@ const ReportBuilder = {
       // показана, но выводы по ней ненадежны, и это должно быть видно
       // сразу в паспорте, а не только в тексте Executive Summary.
       if (reportData.cohortInfo && reportData.cohortInfo.size < 30) {
-        const warningRange = sheet.getRange(ctx.row, 1, 1, 6);
+        const warningRange = Formatter.wrapTextRow(sheet, ctx.row, 6);
         warningRange.setValue(
           "⚠ Когорта меньше 30 человек (n=" + reportData.cohortInfo.size +
           ") — статистические выводы по ней ненадежны."
@@ -261,9 +272,9 @@ const ReportBuilder = {
     const enpsShift = this.interpretEnpsShift_(reportData);
 
     if (enpsShift) {
-      const enpsShiftCell = sheet.getRange(ctx.row, 1);
+      const enpsShiftCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       enpsShiftCell.setValue(enpsShift);
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      Formatter.applyZebraStripe(enpsShiftCell, lineIndex++);
       ctx.row += 1;
     }
 
@@ -273,9 +284,9 @@ const ReportBuilder = {
     const themes = this.detectCommentThemes_(comments);
 
     if (themes.length > 0) {
-      const themesLineCell = sheet.getRange(ctx.row, 1);
+      const themesLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       themesLineCell.setValue("Темы в комментариях: " + this.formatThemesList_(themes.slice(0, 3)));
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      Formatter.applyZebraStripe(themesLineCell, lineIndex++);
       ctx.row += 1;
     }
 
@@ -297,22 +308,22 @@ const ReportBuilder = {
       // читатель должен узнать, что часть строк ниже помечена звездочкой
       // как неподтвержденная, прежде чем прочитает сам список, а не после.
       if (hasUnconfirmedDramaticChange) {
-        const legendCell = sheet.getRange(ctx.row, 1);
+        const legendCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
         legendCell.setValue(
           "Заметные изменения (порог заметности, не тест на значимость; * — изменение " +
           "статистически не подтверждено, возможен шум выборки):"
         );
         legendCell.setFontStyle("italic").setFontColor(Formatter.MUTED_TEXT_COLOR);
-        Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+        Formatter.applyZebraStripe(legendCell, lineIndex++);
         ctx.row += 1;
       }
 
-      const dramaticChangesCell = sheet.getRange(ctx.row, 1);
+      const dramaticChangesCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       dramaticChangesCell.setValue(
         (hasUnconfirmedDramaticChange ? "" : "Заметные изменения: ") +
         this.formatDramaticChangesList_(dramaticChanges)
       );
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      Formatter.applyZebraStripe(dramaticChangesCell, lineIndex++);
       ctx.row += 1;
     }
 
@@ -320,13 +331,13 @@ const ReportBuilder = {
     // тот же визуальный порог DRAMATIC_CHANGE_THRESHOLD_PERCENT_, но без
     // собственного z-теста на уровне текста) — независима от блока выше.
     if (enpsShift) {
-      const disclaimerCell = sheet.getRange(ctx.row, 1);
+      const disclaimerCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       disclaimerCell.setValue(
         "Сдвиг категорий eNPS выше отобран по порогу заметности (визуальная эвристика), а не по " +
         "статистической проверке значимости — на небольшой выборке такая дельта может быть случайным колебанием."
       );
       disclaimerCell.setFontStyle("italic").setFontColor(Formatter.MUTED_TEXT_COLOR);
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      Formatter.applyZebraStripe(disclaimerCell, lineIndex++);
       ctx.row += 1;
     }
 
@@ -334,20 +345,20 @@ const ReportBuilder = {
     const metrics = this.buildRatingMetricsForSummary_(reportData);
     const extremes = this.selectTopBottomRatings_(metrics, 3);
 
-    const highLineCell = sheet.getRange(ctx.row, 1);
+    const highLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     Formatter.setColoredPrefixText(
       highLineCell, "Самые высокие показатели: ",
       this.formatRatingList_(extremes.top), Formatter.DELTA_GOOD_COLOR
     );
-    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+    Formatter.applyZebraStripe(highLineCell, lineIndex++);
     ctx.row += 1;
 
-    const lowLineCell = sheet.getRange(ctx.row, 1);
+    const lowLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     Formatter.setColoredPrefixText(
       lowLineCell, "Самые низкие показатели: ",
       this.formatRatingList_(extremes.bottom), Formatter.DELTA_BAD_COLOR
     );
-    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+    Formatter.applyZebraStripe(lowLineCell, lineIndex++);
     ctx.row += 1;
 
   },
@@ -471,8 +482,8 @@ const ReportBuilder = {
   renderEnpsLine_(ctx, reportData, lineIndex) {
 
     const sheet = ctx.sheet;
-    const rowRange = sheet.getRange(ctx.row, 1, 1, 6);
-    const cell = sheet.getRange(ctx.row, 1);
+    const rowRange = Formatter.wrapTextRow(sheet, ctx.row, 6);
+    const cell = rowRange;
 
     const isWholeCompany = reportData.filters.filter(filter => this.hasFilterValue(filter)).length === 0;
 
@@ -774,6 +785,95 @@ const ReportBuilder = {
       ctx.row += 1;
 
     }
+
+  },
+
+  /**
+   * Company-wide контекст из расширенного контура (см. src/SegmentContext.gs).
+   * Рисуется, только если фильтр отчета однозначно совпал с бакетом,
+   * который уже посчитал AnalyticsService.build (отдел/стаж/город/...).
+   * Секция ничего не пересчитывает — только читает готовые deviations/
+   * confirmed/yearDelta того же сегмента, что видит расширенный контур,
+   * поэтому формулировки намеренно повторяют AnalyticsService.findings
+   * (пп. 6), чтобы не разойтись в терминологии между отчетом и
+   * листами расширенной аналитики.
+   */
+  renderCompanyContext_(ctx, reportData) {
+
+    const segments = reportData.segmentContext || [];
+
+    if (segments.length === 0) return;
+
+    const sheet = ctx.sheet;
+
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue("Контекст по компании (расширенный контур)");
+    Formatter.formatSectionTitle(sheet, titleRange);
+    ctx.row += 1;
+
+    segments.forEach(segment => {
+
+      const badDeviations = segment.deviations.filter(d => d.bad);
+
+      const headline = segment.dimension + ": «" + segment.name + "» (n=" + segment.n + ")" +
+        (segment.confirmed ? " — подтвержденное отклонение" : "");
+
+      const headlineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+      headlineCell.setValue(headline);
+      headlineCell.setFontWeight("bold");
+      ctx.row += 1;
+
+      if (badDeviations.length > 0) {
+
+        const text = badDeviations
+          .map(d => d.label + " " + (d.diff > 0 ? "+" : "") + MathStats.round(d.diff, 1))
+          .join(", ");
+
+        Formatter.wrapTextRow(sheet, ctx.row, 6).setValue(text + " (относительно нормы по компании)");
+        ctx.row += 1;
+
+      }
+
+      if (segment.yearDelta && segment.yearDelta.meaningful) {
+
+        const delta = segment.yearDelta.delta;
+
+        Formatter.wrapTextRow(sheet, ctx.row, 6).setValue(
+          "eNPS год-к-году: " + segment.yearDelta.previous + " → " + segment.metrics.enps +
+          " (" + (delta > 0 ? "+" : "") + delta + ", значимое изменение)"
+        );
+        ctx.row += 1;
+
+        // Ограничение прошлого года относится только к сравнению
+        // годов — показывается рядом с самой динамикой, а не смешано
+        // с оговоркой текущего результата ниже (см.
+        // Segments.yearComparisonLimited).
+        const previousCaveat = segment.previousN > 0 ? Segments.coverageCaveat(segment, true) : null;
+
+        if (previousCaveat && previousCaveat.limitsReliability) {
+          const comparisonCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+          comparisonCell.setValue("Ограничение относится только к сравнению с прошлым годом: " + previousCaveat.text);
+          comparisonCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
+          ctx.row += 1;
+        }
+
+      }
+
+      // Оговорка текущего результата — оценивается только по текущему
+      // году (Segments.currentReliabilityLimited), тот же источник
+      // текста, что у AnalyticsService.findings/AnalyticsWriter.
+      const caveat = Segments.coverageCaveat(segment, false);
+
+      if (caveat.text) {
+        const caveatCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+        caveatCell.setValue(caveat.text);
+        caveatCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
+        ctx.row += 1;
+      }
+
+      ctx.row += 1;
+
+    });
 
   },
 
@@ -1388,6 +1488,24 @@ const ReportBuilder = {
 
     const threshold = this.DRAMATIC_CHANGE_THRESHOLD_PERCENT_;
 
+    // Методика (задача 6): утверждение об ИЗМЕНЕНИИ ("вырос"/"снизился")
+    // делается только там, где скорректированные ДИ обоих годов НЕ
+    // пересекаются (enps.significant, см. Comparison.compareENPS →
+    // MathStats.enpsChangeIsReal). Если пересекаются — два числа рядом,
+    // без утверждения о динамике, годы называются числом, не "прошлый
+    // год". |enps.delta| >= threshold сам по себе это не гарантирует:
+    // разница может быть крупной по модулю и всё равно внутри шума при
+    // широком ДИ (типично для малых/частично охваченных групп).
+    // comparison (см. ReportService.buildReport) существует только когда
+    // source === "2026" — предыдущий год в этом сравнении всегда 2025.
+    const previousYearLabel = "2025";
+
+    if (enps.significant === false) {
+      return "eNPS " + enps.value2026 + ", в " + previousYearLabel + " — " + enps.value2025 +
+        " (разница " + this.formatSignedDelta_(enps.delta, " п.п.") +
+        " не выходит за пределы доверительного интервала — считать динамикой нельзя).";
+    }
+
     // Правило 2: критики стабильны, изменение — переток между
     // промоутерами и нейтралами (произведение дельт < 0 значит разные
     // знаки и что ни одна из них не равна нулю).
@@ -1831,7 +1949,12 @@ const ReportBuilder = {
       averages: averages,
       comparisonAverages: comparisonAverages,
       currentYear: periods.currentYear,
-      previousYear: periods.previousYear
+      previousYear: periods.previousYear,
+      // Сырые строки/заголовки текущего года — нужны только
+      // sectionScore_ (кодирование Scoring.vector по вопросу), больше
+      // никто из renderSection_/renderQuestionBlock_ их не читает.
+      rows: reportData.filteredRows,
+      headers: reportData.headers
     };
 
   },
@@ -1849,7 +1972,8 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
     const sectionStartRow = ctx.row;
-    const title = section.indent ? "    " + section.name : section.name;
+    const baseTitle = section.indent ? "    " + section.name : section.name;
+    const title = baseTitle + this.sectionScoreSuffix_(this.sectionScore_(section, lookups));
 
     const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
     titleRange.setValue(title);
@@ -1865,6 +1989,84 @@ const ReportBuilder = {
     if (sectionContentRows > 0) {
       Formatter.groupRows(sheet, sectionStartRow + 1, sectionContentRows, true);
     }
+
+  },
+
+  // Типы вопросов, для которых определено направление "лучше/хуже" и,
+  // соответственно, можно посчитать normalizeLevel (см. sectionScore_).
+  // "single"/"text" сюда намеренно не входят — это информационные
+  // вопросы о составе выборки (Город/Отдел/Стаж/...) или открытые
+  // ответы (Топ 5), у них нет единой шкалы и правильного направления.
+  SECTION_SCORE_SCORABLE_TYPES_: ["rating5", "scale4", "scale5"],
+
+  /**
+   * "Общая оценка раздела" — среднее нормализованных [0, 100] оценок
+   * всех вопросов раздела, для которых определено направление
+   * "лучше/хуже" (SECTION_SCORE_SCORABLE_TYPES_). Каждый вопрос имеет
+   * одинаковый вес независимо от числа вариантов ответа и числа
+   * заполненных ответов: сначала считается среднее ПО КАЖДОМУ вопросу
+   * и переводится в 0–100 (Norms.normalizeLevel), и только потом эти
+   * уже нормализованные средние усредняются между собой.
+   *
+   * Инверсия обратных вопросов ("Выгорание"/"Смена работы") не
+   * делается здесь отдельно — она уже встроена в кодирование
+   * Scoring.vector (Scoring.MAPS.burnout/retention: "больше = лучше"
+   * для всех вопросов проекта без исключений, см. Scoring.gs), поэтому
+   * normalizeLevel(mean, min, max) сразу дает правильно направленную
+   * оценку.
+   *
+   * @returns {Number|null} null, если в разделе нет ни одного вопроса
+   *   с определенным направлением, либо ни по одному нет ответов.
+   */
+  sectionScore_(section, lookups) {
+
+    const rows = lookups.rows;
+    const headers = lookups.headers;
+
+    const normalizedScores = section.questions
+      .filter(question => this.SECTION_SCORE_SCORABLE_TYPES_.indexOf(question.type) !== -1)
+      .map(question => {
+
+        const values = Scoring.vector(rows, headers, question).filter(value => value !== null);
+
+        if (values.length === 0) return null;
+
+        const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+
+        return Norms.normalizeLevel(mean, Scoring.minFor(question), Scoring.maxFor(question));
+
+      })
+      .filter(value => value !== null);
+
+    if (normalizedScores.length === 0) return null;
+
+    return normalizedScores.reduce((sum, value) => sum + value, 0) / normalizedScores.length;
+
+  },
+
+  /**
+   * "  ·  Общая оценка раздела: 84% 🟢" — дописывается прямо в текст
+   * заголовка раздела (та же строка, тот же merge через
+   * Formatter.formatSectionTitle), а не отдельной строкой ниже.
+   * Заголовок — единственная строка секции, которая остается видимой
+   * при свернутой группе (Formatter.groupRows сворачивает строки
+   * ПОСЛЕ заголовка, см. renderSection_) — только так оценку раздела
+   * видно, не разворачивая группу. Цвет/эмодзи не расставить внутри
+   * одной строки текста (белый текст на цветной плашке заголовка
+   * не подсветить фоном отдельно от остального текста), поэтому статус
+   * передается только эмодзи-светофором (Norms.STATUS_EMOJI), без
+   * заливки ячейки. "" (то есть title без изменений), если score ===
+   * null — в разделе нет ни одного вопроса с определенным направлением
+   * "лучше/хуже" (см. sectionScore_).
+   */
+  sectionScoreSuffix_(score) {
+
+    if (score === null) return "";
+
+    const percent = Math.round(score);
+    const status = Norms.status(score, "sectionScore");
+
+    return "   ·   Общая оценка раздела: " + percent + "% " + Norms.STATUS_EMOJI[status];
 
   },
 
@@ -1926,6 +2128,17 @@ const ReportBuilder = {
         .filter(item => item.count2026 > 0)
         .slice()
         .sort((a, b) => b.count2026 - a.count2026);
+    }
+
+    // Теги справочника "перформанс" ("Соответствие ожиданиям"/"Грейд",
+    // performanceOnly:true — см. Questions.gs) показываются в "Составе
+    // выборки", только если в этой конкретной выборке отчета они вообще
+    // есть: источник "Ответы 2025" их не содержит вовсе, а у части
+    // сотрудников 2026 справочник может быть не заполнен/не сопоставлен.
+    // Вопрос без единого тега пропускается целиком — ни подписи, ни
+    // пустой таблицы, а не "вопрос без данных".
+    if (question.performanceOnly && items.length === 0) {
+      return;
     }
 
     // "Выгорание"/"Смена работы" (RISK_QUESTIONS_) и вопросы Да/Нет с
@@ -3528,7 +3741,19 @@ const ReportBuilder = {
       const window = matchingSentences.join(" ");
 
       const hasNegative = entry.negative.some(marker => window.indexOf(marker.toLowerCase()) !== -1);
-      const hasPositive = entry.positive.some(marker => window.indexOf(marker.toLowerCase()) !== -1);
+
+      // Позитивные маркеры ищутся не в исходном window, а после вычитания
+      // всех сработавших негативных маркеров. Без этого "понятно" ложно
+      // засчитывается как позитив внутри "непонятно" (аналогично
+      // "рассказывают" внутри "не рассказывают") — чисто негативный
+      // комментарий получал бы тональность mixed только из-за того, что
+      // негативный маркер целиком содержит позитивный как подстроку.
+      const windowWithoutNegative = entry.negative.reduce((text, marker) => {
+        const lowerMarker = marker.toLowerCase();
+        return window.indexOf(lowerMarker) !== -1 ? text.split(lowerMarker).join(" ") : text;
+      }, window);
+
+      const hasPositive = entry.positive.some(marker => windowWithoutNegative.indexOf(marker.toLowerCase()) !== -1);
 
       const tone = hasNegative && hasPositive ? "mixed" : hasNegative ? "negative" : hasPositive ? "positive" : "neutral";
 

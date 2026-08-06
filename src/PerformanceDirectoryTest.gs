@@ -34,7 +34,12 @@ function testPerformanceDirectory_runAll() {
     testPerformanceDirectory_managerIssuesReportsMissingManager_,
     testPerformanceDirectory_managerIssuesReportsMultipleManagers_,
     testPerformanceDirectory_managerIssuesDoesNotStopAtFirstError_,
-    testPerformanceDirectory_managerIssuesIndependentOfGrade_
+    testPerformanceDirectory_managerIssuesIndependentOfGrade_,
+    testPerformanceDirectory_countsForFiltersUnfiltered_,
+    testPerformanceDirectory_countsForFiltersExcludesEmptyValues_,
+    testPerformanceDirectory_countsForFiltersSupportsDepartmentFilter_,
+    testPerformanceDirectory_countsForFiltersUnsupportedForOtherFilters_,
+    testPerformanceDirectory_countsForFiltersUnsupportedWhenDirectoryBroken_
   ];
 
   const failures = [];
@@ -557,5 +562,118 @@ function testPerformanceDirectory_managerIssuesIndependentOfGrade_() {
 
   assertPerfEquals_(issues.length, 1, "один проблемный отдел");
   assertPerfEquals_(issues[0].type, "missing", "грейд lead у нескольких сотрудников — это не руководители отдела");
+
+}
+
+// ==========================================================
+// countsForFilters — знаменатель "Приглашены" для срезов
+// "Соответствие ожиданиям"/"Грейд" (см. AnalyticsService.build)
+// ==========================================================
+
+function withPerfDirectoryCache_(directory, fn) {
+
+  const original = PerformanceDirectory.cache_;
+  PerformanceDirectory.cache_ = directory;
+
+  try {
+    fn();
+  } finally {
+    PerformanceDirectory.cache_ = original;
+  }
+
+}
+
+/**
+ * "Приглашены" считается по ВСЕМ сотрудникам справочника с заполненным
+ * полем — независимо от того, попали ли они в опрос вообще (фикстура
+ * ниже не пересекается со строками "Ответы 2026").
+ */
+function testPerformanceDirectory_countsForFiltersUnfiltered_() {
+
+  withPerfDirectoryCache_(perfDirectoryValid_(), () => {
+
+    const expectations = PerformanceDirectory.countsForFilters(PerformanceDirectory.COLUMNS.EXPECTATIONS, []);
+
+    assertPerfTrue_(expectations.supported, "без фильтров знаменатель поддерживается");
+    assertPerfEquals_(expectations.total, 3, "все три сотрудника справочника учтены");
+    assertPerfEquals_(expectations.counts["соответствует"], 2, "«Соответствует»: Иванов + Сидоров");
+    assertPerfEquals_(expectations.counts["превышает"], 1, "«Превышает»: Петрова");
+
+    const grade = PerformanceDirectory.countsForFilters(PerformanceDirectory.COLUMNS.GRADE, []);
+
+    assertPerfEquals_(grade.total, 3, "все три сотрудника учтены и для грейда");
+    assertPerfEquals_(grade.counts["middle"], 1, "middle: Иванов");
+    assertPerfEquals_(grade.counts["senior"], 1, "senior: Петрова");
+    assertPerfEquals_(grade.counts["lead"], 1, "lead: Сидоров");
+
+  });
+
+}
+
+function testPerformanceDirectory_countsForFiltersExcludesEmptyValues_() {
+
+  const rows = [
+    ["Иванов Иван", "Москва", "Отдел А", "Соответствует", "middle", true],
+    ["Петрова Мария", "Москва", "Отдел А", "", "", false] // поле перформанса не заполнено
+  ];
+  const directory = PerformanceDirectory.parse_(PERF_TEST_HEADERS_, rows);
+
+  withPerfDirectoryCache_(directory, () => {
+
+    const expectations = PerformanceDirectory.countsForFilters(PerformanceDirectory.COLUMNS.EXPECTATIONS, []);
+
+    assertPerfEquals_(expectations.total, 1, "сотрудник с пустым полем не входит в приглашенные");
+
+  });
+
+}
+
+function testPerformanceDirectory_countsForFiltersSupportsDepartmentFilter_() {
+
+  withPerfDirectoryCache_(perfDirectoryValid_(), () => {
+
+    const filters = [{ question: "Отдел", values: ["Отдел разработки сайтов"] }];
+    const expectations = PerformanceDirectory.countsForFilters(PerformanceDirectory.COLUMNS.EXPECTATIONS, filters);
+
+    assertPerfTrue_(expectations.supported, "фильтр по «Отдел» поддерживается (поле есть и в анкете, и в справочнике)");
+    assertPerfEquals_(expectations.total, 2, "только сотрудники «Отдела разработки сайтов»");
+    assertPerfEquals_(expectations.counts["соответствует"], 1, "Иванов — «Соответствует»");
+    assertPerfEquals_(expectations.counts["превышает"], 1, "Петрова — «Превышает»");
+
+  });
+
+}
+
+function testPerformanceDirectory_countsForFiltersUnsupportedForOtherFilters_() {
+
+  withPerfDirectoryCache_(perfDirectoryValid_(), () => {
+
+    const filters = [{ question: "Город", values: ["Москва"] }];
+    const result = PerformanceDirectory.countsForFilters(PerformanceDirectory.COLUMNS.EXPECTATIONS, filters);
+
+    assertPerfTrue_(!result.supported, "фильтр по «Город» не поддерживается — в справочнике нет знаменателя для города");
+    assertPerfEquals_(result.total, null, "total=null, когда знаменатель не поддерживается");
+
+  });
+
+}
+
+function testPerformanceDirectory_countsForFiltersUnsupportedWhenDirectoryBroken_() {
+
+  const original = PerformanceDirectory.cache_;
+  const originalLoad = PerformanceDirectory.load;
+
+  PerformanceDirectory.cache_ = null;
+  PerformanceDirectory.load = function () {
+    throw new Error('Лист "перформанс" не найден.');
+  };
+
+  try {
+    const result = PerformanceDirectory.countsForFilters(PerformanceDirectory.COLUMNS.EXPECTATIONS, []);
+    assertPerfTrue_(!result.supported, "сломанный справочник — знаменатель недоступен, а не ошибка");
+  } finally {
+    PerformanceDirectory.cache_ = original;
+    PerformanceDirectory.load = originalLoad;
+  }
 
 }

@@ -28,7 +28,7 @@ function getFilterableQuestions(source) {
       dataTitle: question.dataTitle || null,
       type: question.type,
       operators: isOperatorType ? Filters.operators : null,
-      options: isOperatorType ? null : Filters.getValueOptions(question, survey.headers, survey.data)
+      options: isOperatorType ? null : Filters.getValueOptions(question, survey.headers, survey.data, resolvedSource)
     };
   });
 }
@@ -44,4 +44,14 @@ function getFilterableQuestions(source) {
 function buildReportFromSidebar(source, filters, compareWith2025, customReportName, cohortOnly) {
   ensureChangeTrigger_();
   return BatchReports.run(source, filters, compareWith2025, customReportName, cohortOnly);
+}
+
+/**
+ * Сравнить 2-4 произвольные выборки (наборы фильтров) одного источника —
+ * см. SampleComparisonService.compareMany. filtersList/namesList — массивы
+ * одинаковой длины (2-4 элемента), без пакетного режима BatchReports.
+ */
+function compareSamplesFromSidebar(source, filtersList, namesList) {
+  ensureChangeTrigger_();
+  return SampleComparisonService.compareMany(source, filtersList, namesList);
 }

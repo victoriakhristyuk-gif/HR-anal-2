@@ -149,13 +149,28 @@ function testReportYear_rendersStandalone2025Headers_() {
  */
 function testReportYear_canonicalizesStandalone2025Department_() {
 
+  const originalRows = Headcount.rowsCache_;
+  const originalDirectory = Headcount.directory_;
+  Headcount.rowsCache_ = [
+    { year: "2025", departmentId: "dept_network_technologies", division: "ИТ", department: "Отдел сетевого администрирования", count: 10, row: 2 },
+    { year: "2026", departmentId: "dept_network_technologies", division: "ИТ", department: "Отдел сетевых технологий", count: 12, row: 3 }
+  ];
+  Headcount.directory_ = null;
+
   const headers = ["Отдел", "eNPS"];
   const rows = [["Отдел сетевого администрирования", "9"]];
   const question = { title: "Отдел" };
 
-  const distributionRows = getReportDistributionRows_(
-    "2025", question, rows, headers
-  );
+  let distributionRows;
+
+  try {
+    distributionRows = getReportDistributionRows_(
+      "2025", question, rows, headers
+    );
+  } finally {
+    Headcount.rowsCache_ = originalRows;
+    Headcount.directory_ = originalDirectory;
+  }
 
   assertReportYearEquals_(
     distributionRows[0][0],

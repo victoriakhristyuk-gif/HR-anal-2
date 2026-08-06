@@ -52,7 +52,9 @@ const Summary = {
     number: 90,
     distribution: 300,
     top: 300,
-    average: 80
+    average: 80,
+    headcount: 100,
+    responseRate: 90
   },
 
   /**
@@ -113,7 +115,17 @@ const Summary = {
     { block: "Средние оценки", title: "ДМС", kind: "average", question: "ДМС" },
     { block: "Средние оценки", title: "Мерч за достижения", kind: "average", question: "Мерч за достижения" },
     { block: "Средние оценки", title: "Удовл. раб. задачами", kind: "average", question: "Удовлетворенность рабочими задачами" },
-    { block: "Средние оценки", title: "ЗП", kind: "average", question: "ЗП" }
+    { block: "Средние оценки", title: "ЗП", kind: "average", question: "ЗП" },
+
+    // Добавлены в конец, чтобы существующий сводный лист можно было
+    // безопасно расширить без сдвига уже накопленных данных.
+    { block: "Явка", title: "Приглашены", kind: "headcount" },
+    { block: "Явка", title: "Явка, %", kind: "responseRate" },
+
+    // Company-wide сигналы из расширенного контура для этого же среза
+    // (см. src/SegmentContext.gs) — пусто, если фильтр отчета не бьет
+    // однозначно в один бакет измерения (отдел/стаж/город/...).
+    { block: "Контекст по компании", title: "Отклонения (расш. контур)", kind: "segmentContext" }
 
   ],
 
@@ -241,6 +253,7 @@ const Summary = {
     const existing = this.findSheetByMetadata_(ss);
 
     if (existing) {
+      this.migrateCoverageColumns_(existing);
       return existing;
     }
 
@@ -265,6 +278,42 @@ const Summary = {
     this.renderHeader_(sheet);
 
     return sheet;
+
+  },
+
+  /**
+   * Безопасная миграция сводной предыдущего формата: два новых столбца
+   * добавляются только если вся старая шапка совпадает и справа нет
+   * пользовательских столбцов. Существующие данные не сдвигаются.
+   */
+  migrateCoverageColumns_(sheet) {
+
+    const addedColumns = 2;
+    const legacyColumns = this.COLUMNS.slice(0, this.COLUMNS.length - addedColumns);
+    const legacyTotalColumns = legacyColumns.length + 1;
+    const lastColumn = sheet.getLastColumn();
+
+    if (lastColumn === this.totalColumns_() || lastColumn !== legacyTotalColumns) return;
+
+    const actualTitles = sheet
+      .getRange(this.HEADER_ROW, this.KEY_COLUMN + 1, 1, legacyColumns.length)
+      .getValues()[0];
+    const titlesMatch = legacyColumns.every(
+      (column, index) => String(actualTitles[index]) === column.title
+    );
+
+    if (!titlesMatch) return;
+
+    const missingColumns = this.totalColumns_() - sheet.getMaxColumns();
+    if (missingColumns > 0) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), missingColumns);
+    }
+
+    this.renderHeaderValues_(sheet);
+    for (let index = this.COLUMNS.length - addedColumns; index < this.COLUMNS.length; index++) {
+      const column = this.COLUMNS[index];
+      sheet.setColumnWidth(this.KEY_COLUMN + 1 + index, this.WIDTH_[column.kind] || this.WIDTH_.number);
+    }
 
   },
 
@@ -689,6 +738,20 @@ const Summary = {
       return (employees === null || employees === undefined) ? "" : employees;
     }
 
+    if (column.kind === "headcount") {
+      const value = reportData.headcountByYear
+        ? reportData.headcountByYear[reportData.source]
+        : null;
+      return (value === null || value === undefined) ? "" : value;
+    }
+
+    if (column.kind === "responseRate") {
+      const value = reportData.responseRateByYear
+        ? reportData.responseRateByYear[reportData.source]
+        : null;
+      return (value === null || value === undefined) ? "" : value;
+    }
+
     if (column.kind === "enps") {
       const value = this.enpsValue_(reportData, column.year);
       return value === null ? "" : value;
@@ -709,6 +772,10 @@ const Summary = {
 
     if (column.kind === "average") {
       return this.formatAverage_(lookups.averages[column.question]);
+    }
+
+    if (column.kind === "segmentContext") {
+      return this.formatSegmentContext_(reportData.segmentContext);
     }
 
     throw new Error("Summary: неизвестный тип столбца \"" + column.kind + "\"");
@@ -825,6 +892,27 @@ const Summary = {
   formatAverage_(item) {
 
     return (item && item.count > 0) ? item.average : "";
+
+  },
+
+  /**
+   * Company-wide сигналы из расширенного контура (см. SegmentContext.gs)
+   * одной строкой — одна сводная не терпит многострочных ячеек, как у
+   * distribution/top (см. MONO_FONT), поэтому здесь просто перечисление
+   * через "; ", без выравнивания.
+   */
+  formatSegmentContext_(segments) {
+
+    if (!segments || segments.length === 0) return "";
+
+    return segments
+      .map(segment => {
+        const badCount = segment.deviations.filter(d => d.bad).length;
+        return segment.dimension + ": " + badCount + " " +
+          ReportBuilder.pluralizeRu_(badCount, ["отклонение", "отклонения", "отклонений"]) +
+          (segment.confirmed ? " (подтверждено)" : "");
+      })
+      .join("; ");
 
   },
 

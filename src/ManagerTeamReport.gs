@@ -36,12 +36,16 @@
  * считаются при любом n >= 1 (n — число ответивших на конкретный
  * вопрос, отдельно по каждому вопросу), но помечаются статусом
  * надежности (см. STATUS/reliabilityStatusFor_): n=0 — нет ответов
- * команды, n=1-2 — очень мало данных, n=3-4 — мало данных, n>=
- * MIN_TEAM_SIZE — достаточно данных. Автоматический вывод в колонке
+ * команды; n>=MIN_TEAM_SIZE ИЛИ доля ответивших от всей команды >=
+ * TEAM_COVERAGE_OK_RATIO — "достаточно данных"; иначе — статус называет
+ * обе цифры ("ответили N из M"), не абстрактное "мало данных": 4 из 5
+ * (80% команды) это полноценный результат, а 4 из 40 (10%) — нет, хотя
+ * абсолютное n одинаковое. Автоматический вывод в колонке
  * "Интерпретация"/приоритет считаются только при статусе "достаточно
- * данных" — при меньшем n результат остается видимым для ориентировочного
- * сравнения, но не подмешивается в выводы/рейтинги/значимость. При n=1
- * средняя команды фактически раскрывает ответ одного сотрудника —
+ * данных" — при меньшей доле результат остается видимым для
+ * ориентировочного сравнения, но не подмешивается в выводы/рейтинги/
+ * значимость. При n=1 средняя команды фактически раскрывает ответ
+ * одного сотрудника —
  * доступ к листу должен быть ограничен так же, как к персональным данным
  * (см. предупреждение в write()).
  *
@@ -68,20 +72,20 @@ const ManagerTeamReport = {
 
   SHEET_NAME: "Руководитель и команда",
 
-  // Маленькие команды больше не исключаются из сравнения (n >= 1 уже
-  // достаточно, чтобы посчитать среднюю и разницу) — вместо порога
-  // отсечения это теперь только граница "полной" надежности статуса
-  // STATUS.OK (см. reliabilityStatusFor_/VERY_LOW_TEAM_MAX/LOW_TEAM_MAX
-  // ниже). Значение не изменилось (5), поэтому старое поведение при
-  // n >= 5 остается прежним.
+  // Маленькие команды не исключаются из сравнения (n >= 1 уже
+  // достаточно, чтобы посчитать среднюю и разницу). "Достаточно данных"
+  // (STATUS.OK) — если ответили хотя бы MIN_TEAM_SIZE человек ЛИБО
+  // ответила доля команды не ниже TEAM_COVERAGE_OK_RATIO (см.
+  // reliabilityStatusFor_ ниже): 4 ответа из команды в 5 человек — это
+  // вся команда, а не "мало данных"; 4 из 40 — это четыре человека, и
+  // абсолютное n=4 тут ничем не отличается от первого случая, разница
+  // только в доле. Раньше порог был абсолютным (n>=5) и не различал
+  // эти два случая.
   MIN_TEAM_SIZE: 5,
 
-  // Верхние границы n для промежуточных статусов надежности —
-  // n=0 отдельный случай (NO_TEAM_ANSWERS), n=1..VERY_LOW_TEAM_MAX —
-  // VERY_LOW_TEAM, n=(VERY_LOW_TEAM_MAX+1)..LOW_TEAM_MAX — LOW_TEAM,
-  // n > LOW_TEAM_MAX (т.е. n >= MIN_TEAM_SIZE) — OK.
-  VERY_LOW_TEAM_MAX: 2,
-  LOW_TEAM_MAX: 4,
+  // Доля команды, ответившей на конкретный вопрос, при которой
+  // результат считается достаточным независимо от абсолютного n.
+  TEAM_COVERAGE_OK_RATIO: 0.6,
 
   STATUS: {
     MANAGER_DID_NOT_ANSWER: "руководитель не ответил",
@@ -96,8 +100,10 @@ const ManagerTeamReport = {
     MANAGER_NOT_USED: "руководитель не пользовался",
     MANAGER_UNRECOGNIZED: "нераспознанный вариант ответа",
     NO_TEAM_ANSWERS: "нет ответов команды",
-    VERY_LOW_TEAM: "очень мало данных",
-    LOW_TEAM: "мало данных",
+    // "Мало данных"/"очень мало данных" больше не отдельные статусы —
+    // reliabilityStatusFor_ вместо них возвращает динамическую метку
+    // "ответили N из M" (см. задачу 5 методики: доля команды важнее
+    // абсолютного n).
     OK: "достаточно данных",
     MULTIPLE_MANAGERS: "ошибка: несколько руководителей"
   },
@@ -145,6 +151,42 @@ const ManagerTeamReport = {
     LOW: "Низкий"
   },
 
+  // Направление расхождения по конкретной теме (колонка "Кто оценивает
+  // выше" в компактном листе) — считается напрямую по знаку diff
+  // (managerLevel − teamLevel), см. whoScoresHigherFor_. Не путать с
+  // величиной расхождения (столбец "Расхождение" показывает |diff|).
+  WHO_HIGHER: {
+    MANAGER: "Руководитель",
+    TEAM: "Команда",
+    EQUAL: "Оценки совпадают"
+  },
+
+  // Итоговое резюме по отделу (колонка "Кто в целом оценивает выше" в
+  // компактном листе, итоговая строка отдела) — сравнение средней оценки
+  // руководителя со средней оценкой команды по темам, где присутствуют
+  // обе оценки (см. overallWhoScoresHigherFor_). Порог существенности —
+  // тот же INTERPRETATION_THRESHOLDS.SMALL_DIFF, что уже используется в
+  // interpretationFor_ для "оценки совпадают" по отдельной теме, новая
+  // методика не вводится.
+  OVERALL_WHO_HIGHER: {
+    MANAGER: "Руководитель оценивает выше",
+    TEAM: "Сотрудники оценивают выше",
+    EQUAL: "Существенных расхождений нет",
+    INSUFFICIENT: "Недостаточно данных"
+  },
+
+  // Общий статус отдела в свернутой итоговой строке — производный от
+  // уже посчитанных significantCount/hasComparison (см. build()), не
+  // новая методика: "Оценки близки" — hasComparison и significantCount=0,
+  // "Есть расхождения" — hasComparison и significantCount>0,
+  // "Недостаточно данных для сравнения" — !hasComparison (не путать с
+  // значением "0 расхождений").
+  SUMMARY_STATUS: {
+    CLOSE: "Оценки близки",
+    DISCREPANCIES: "Есть расхождения",
+    INSUFFICIENT: "Недостаточно данных для сравнения"
+  },
+
   /**
    * Чистый расчет — без обращений к SpreadsheetApp. Принимает "сырые"
    * (необогащенные) headers/rows источника "Ответы 2026" и уже
@@ -154,11 +196,13 @@ const ManagerTeamReport = {
    * @param {Array<String>} headers
    * @param {Array<Array>} rows
    * @param {{departments: Object}} directory - PerformanceDirectory.parse_/load результат
+   * @param {Function} [divisionResolver] - передается только рабочим
+   *   write(); отсутствие сохраняет build() чистым для тестов
    * @returns {Array<Object>} по одной записи на отдел с ровно одним или
    *   несколькими отмеченными руководителями (отделы без руководителя
    *   в результат не попадают вообще)
    */
-  build(headers, rows, directory) {
+  build(headers, rows, directory, divisionResolver) {
 
     const departmentIndex = headers.findIndex(
       h => this.normalize_(h) === this.normalize_(PerformanceDirectory.COLUMNS.DEPARTMENT)
@@ -217,7 +261,9 @@ const ManagerTeamReport = {
       if (managers.length === 0) return;
 
       const canonicalDepartment = DepartmentAliases.canonicalize(department);
-      const division = Headcount.divisionOf(canonicalDepartment) || Headcount.UNASSIGNED_LABEL;
+      const division = typeof divisionResolver === "function"
+        ? (divisionResolver(canonicalDepartment) || Headcount.UNASSIGNED_LABEL)
+        : Headcount.UNASSIGNED_LABEL;
 
       if (managers.length > 1) {
         results.push({
@@ -308,7 +354,7 @@ const ManagerTeamReport = {
         } else if (managerCase === this.MANAGER_ANSWER_CASE_.UNRECOGNIZED) {
           status = this.STATUS.MANAGER_UNRECOGNIZED;
         } else {
-          status = this.reliabilityStatusFor_(teamN);
+          status = this.reliabilityStatusFor_(teamN, teamRows.length);
         }
 
         // Текстовая интерпретация ответа руководителя зависит от case:
@@ -338,6 +384,7 @@ const ManagerTeamReport = {
 
         const interpretation = this.interpretationFor_(status, managerLevel, teamLevel, diff);
         const priority = this.priorityFor_(status, teamLevel, diff);
+        const whoScoresHigher = this.whoScoresHigherFor_(diff);
 
         return {
           question: question.title,
@@ -349,26 +396,155 @@ const ManagerTeamReport = {
           diff: diff,
           status: status,
           interpretation: interpretation,
-          priority: priority
+          priority: priority,
+          whoScoresHigher: whoScoresHigher
         };
 
       });
 
-      // Сортировка по приоритету (Высокий → Средний → Низкий) — только
-      // порядок вывода внутри отдела, расчеты по вопросам не меняются.
-      questionRows.sort((a, b) => this.priorityRank_(a.priority) - this.priorityRank_(b.priority));
+      // Сохраняем исходный индекс вопроса (порядок анкеты) до сортировки —
+      // это единственный способ дать стабильный тай-брейк для тем с
+      // одинаковым |расхождение| (см. compareQuestionsByAbsDiff_ ниже),
+      // не полагаясь неявно на стабильность Array.sort в рантайме.
+      questionRows.forEach((row, i) => { row.originalIndex = i; });
+
+      // Сортировка внутри отдела — по модулю расхождения (Оценка
+      // руководителя − Средняя оценка команды), от большего к меньшему;
+      // темы без числового сравнения (diff === null — руководитель не
+      // ответил/затруднился/выбрал "не пользовался"/нераспознанный текст/
+      // нет ответов команды) уходят в конец, сохраняя исходный порядок
+      // анкеты между собой. Сам расчет diff/статуса этим не затрагивается
+      // — сортировка только про порядок вывода строк.
+      questionRows.sort((a, b) => this.compareQuestionsByAbsDiff_(a, b));
+
+      // Существенное расхождение — только среди тем с полностью надежным
+      // сравнением (status === STATUS.OK), с уже существующей категоризацией
+      // interpretationFor_ (BLIND_SPOT/MANAGER_MORE_CRITICAL), без нового
+      // порога поверх INTERPRETATION_THRESHOLDS.LARGE_DIFF. Темы, которые
+      // сравнить нельзя, не входят ни в matchedCount, ни в significantCount
+      // — отсутствие данных не приравнивается к нулю расхождений.
+      const comparableQuestions = questionRows.filter(row => row.status === this.STATUS.OK);
+      const significantCount = comparableQuestions.filter(row =>
+        row.interpretation === this.INTERPRETATION.BLIND_SPOT ||
+        row.interpretation === this.INTERPRETATION.MANAGER_MORE_CRITICAL
+      ).length;
+      const comparableCount = comparableQuestions.length;
+      const matchedCount = comparableCount - significantCount;
+      const hasComparison = comparableCount > 0;
+      const overallWhoScoresHigher = this.overallWhoScoresHigherFor_(questionRows);
 
       results.push({
         division: division,
         department: department,
         managerAnswered: managerAnswered,
         teamSize: teamRows.length,
-        questions: questionRows
+        questions: questionRows,
+        hasComparison: hasComparison,
+        comparableCount: comparableCount,
+        matchedCount: matchedCount,
+        significantCount: significantCount,
+        overallWhoScoresHigher: overallWhoScoresHigher
       });
 
     });
 
+    // Сохраняем исходный порядок отделов (см. departmentOrder.sort выше —
+    // уже устоявшийся порядок текущего отчета) до финальной сортировки —
+    // нужен как тай-брейк при равном числе существенных расхождений.
+    results.forEach((department, i) => { department.originalIndex = i; });
+
+    // Сортировка отделов — по количеству существенных расхождений, от
+    // большего к меньшему; отделы без существенных расхождений — после
+    // отделов с расхождениями; отделы, для которых сравнение вообще
+    // невозможно (ошибка "несколько руководителей" или ни одной темы со
+    // статусом OK), — в самом конце, отдельно от "0 расхождений".
+    results.sort((a, b) => this.compareDepartmentsBySignificance_(a, b));
+
     return results;
+
+  },
+
+  /**
+   * Стабильный компаратор тем внутри отдела — по |diff| от большего к
+   * меньшему, темы без числового diff уходят в конец, между собой
+   * сохраняя originalIndex (порядок анкеты).
+   */
+  compareQuestionsByAbsDiff_(a, b) {
+
+    const aNull = a.diff === null;
+    const bNull = b.diff === null;
+
+    if (aNull !== bNull) return aNull ? 1 : -1;
+
+    if (!aNull) {
+      const av = Math.abs(a.diff);
+      const bv = Math.abs(b.diff);
+      if (av !== bv) return bv - av;
+    }
+
+    return a.originalIndex - b.originalIndex;
+
+  },
+
+  /**
+   * Стабильный компаратор отделов — по significantCount от большего к
+   * меньшему среди отделов с hasComparison, отделы без сравнения — в
+   * конце; между собой равные по significantCount/hasComparison отделы
+   * сохраняют originalIndex (текущий порядок отчета).
+   */
+  compareDepartmentsBySignificance_(a, b) {
+
+    const aHas = !a.error && a.hasComparison;
+    const bHas = !b.error && b.hasComparison;
+
+    if (aHas !== bHas) return aHas ? -1 : 1;
+
+    if (aHas && a.significantCount !== b.significantCount) {
+      return b.significantCount - a.significantCount;
+    }
+
+    return a.originalIndex - b.originalIndex;
+
+  },
+
+  /**
+   * "Руководитель" — числовая оценка руководителя выше; "Команда" —
+   * выше команда; "Оценки совпадают" — разницы нет; пусто — числовое
+   * сравнение невозможно (см. STATUS для причины — она уже отражена в
+   * колонке "Статус"/"Статус надёжности").
+   */
+  whoScoresHigherFor_(diff) {
+    if (diff === null || diff === undefined) return "";
+    if (diff > 0) return this.WHO_HIGHER.MANAGER;
+    if (diff < 0) return this.WHO_HIGHER.TEAM;
+    return this.WHO_HIGHER.EQUAL;
+  },
+
+  /**
+   * Итоговое резюме по отделу для колонки "Кто в целом оценивает выше" —
+   * средняя оценка руководителя против средней оценки команды, только по
+   * темам, где присутствуют обе оценки (managerLevel и teamLevel не
+   * null — отсутствующие оценки не участвуют в среднем и не заменяются
+   * нулем). Порог существенности — тот же SMALL_DIFF, что и в
+   * interpretationFor_ (не новая методика).
+   *
+   * @param {Array<Object>} questionRows - questionRows из build() (до
+   *   сортировки/после — не важно, функция не смотрит на порядок)
+   * @returns {String} одно из OVERALL_WHO_HIGHER
+   */
+  overallWhoScoresHigherFor_(questionRows) {
+
+    const comparable = questionRows.filter(row => row.managerLevel !== null && row.teamLevel !== null);
+
+    if (comparable.length === 0) return this.OVERALL_WHO_HIGHER.INSUFFICIENT;
+
+    const avgManager = comparable.reduce((sum, row) => sum + row.managerLevel, 0) / comparable.length;
+    const avgTeam = comparable.reduce((sum, row) => sum + row.teamLevel, 0) / comparable.length;
+    const diff = avgManager - avgTeam;
+
+    if (Math.abs(diff) <= this.INTERPRETATION_THRESHOLDS.SMALL_DIFF) return this.OVERALL_WHO_HIGHER.EQUAL;
+
+    return diff > 0 ? this.OVERALL_WHO_HIGHER.MANAGER : this.OVERALL_WHO_HIGHER.TEAM;
 
   },
 
@@ -522,24 +698,33 @@ const ManagerTeamReport = {
 
   },
 
-  priorityRank_(priority) {
-    if (priority === this.PRIORITY.HIGH) return 0;
-    if (priority === this.PRIORITY.MEDIUM) return 1;
-    return 2;
-  },
-
   /**
    * Статус надежности по n команды, ответившей на конкретный вопрос —
    * вызывается только когда руководитель сам ответил на этот вопрос
    * (иначе действуют MANAGER_DID_NOT_ANSWER/MANAGER_SKIPPED_QUESTION,
    * см. build). Команда не отсекается ни при каком n — статус только
    * маркирует надежность уже посчитанной средней/разницы.
+   *
+   * STATUS.OK — фиксированная метка (downstream-код сравнивает с ней
+   * напрямую, см. interpretationFor_/priorityFor_/comparableQuestions),
+   * "достаточно данных" при n>=MIN_TEAM_SIZE ИЛИ доле команды
+   * >=TEAM_COVERAGE_OK_RATIO. Иначе — не общая фраза "мало данных", а
+   * обе цифры: "ответили N из M" (M — team.length, вся команда,
+   * ответившая на опрос вообще, не только на этот вопрос).
+   *
+   * @param {Number} teamN - ответивших на ЭТОТ вопрос
+   * @param {Number} teamSize - вся команда (teamRows.length)
    */
-  reliabilityStatusFor_(teamN) {
+  reliabilityStatusFor_(teamN, teamSize) {
+
     if (teamN === 0) return this.STATUS.NO_TEAM_ANSWERS;
-    if (teamN <= this.VERY_LOW_TEAM_MAX) return this.STATUS.VERY_LOW_TEAM;
-    if (teamN <= this.LOW_TEAM_MAX) return this.STATUS.LOW_TEAM;
-    return this.STATUS.OK;
+
+    const ratio = teamSize > 0 ? teamN / teamSize : 0;
+
+    if (teamN >= this.MIN_TEAM_SIZE || ratio >= this.TEAM_COVERAGE_OK_RATIO) return this.STATUS.OK;
+
+    return "ответили " + teamN + " из " + teamSize;
+
   },
 
   /**
@@ -560,13 +745,79 @@ const ManagerTeamReport = {
     "руководитель затруднился ответить": "#fcd5b4",
     "руководитель не пользовался": "#fcd5b4",
     "нераспознанный вариант ответа": "#d9d2e9",
-    "нет ответов команды": "#d9d9d9",
-    "очень мало данных": "#f8cbad",
-    "мало данных": "#ffe699"
+    "нет ответов команды": "#d9d9d9"
   },
 
+  // "Ответили N из M" (см. reliabilityStatusFor_) — не в
+  // STATUS_COLORS_ (фиксированный словарь по точной строке не подходит
+  // для строки с переменными числами), поэтому проверяется отдельным
+  // префиксом.
+  PARTIAL_TEAM_STATUS_PREFIX_: "ответили ",
+  PARTIAL_TEAM_STATUS_COLOR_: "#ffe699",
+
   statusColor_(status) {
-    return this.STATUS_COLORS_.hasOwnProperty(status) ? this.STATUS_COLORS_[status] : null;
+    if (this.STATUS_COLORS_.hasOwnProperty(status)) return this.STATUS_COLORS_[status];
+    if (typeof status === "string" && status.indexOf(this.PARTIAL_TEAM_STATUS_PREFIX_) === 0) {
+      return this.PARTIAL_TEAM_STATUS_COLOR_;
+    }
+    return null;
+  },
+
+  // Заливка ячейки "Статус" итоговой строки отдела — переиспользует ту
+  // же цветовую логику проекта, что и Norms.COLORS (зеленый "отлично",
+  // красный "критично"), плюс существующий серый "нет данных" (см.
+  // STATUS_COLORS_.NO_TEAM_ANSWERS выше) — новой палитры не вводится.
+  SUMMARY_STATUS_COLORS_: {
+    "Оценки близки": "#c6efce",
+    "Есть расхождения": "#ffc7ce",
+    "Недостаточно данных для сравнения": "#d9d9d9"
+  },
+
+  /**
+   * Общий статус сравнения руководителя и команды для итоговой строки
+   * отдела — производный ярлык поверх уже посчитанных significantCount/
+   * hasComparison, без новой методики: hasComparison=false — сравнение
+   * невозможно (это НЕ то же самое, что significantCount=0).
+   */
+  overallStatusFor_(hasComparison, significantCount) {
+    if (!hasComparison) return this.SUMMARY_STATUS.INSUFFICIENT;
+    if (significantCount === 0) return this.SUMMARY_STATUS.CLOSE;
+    return this.SUMMARY_STATUS.DISCREPANCIES;
+  },
+
+  /**
+   * Цвет ячейки "Статус" — работает как для итоговых строк отдела
+   * (SUMMARY_STATUS_COLORS_), так и для строк детализации по темам
+   * (STATUS_COLORS_/statusColor_) — один и тот же физический столбец
+   * листа переиспользуется для обоих типов строк (см. write()).
+   */
+  rowStatusColor_(status) {
+    if (this.SUMMARY_STATUS_COLORS_.hasOwnProperty(status)) return this.SUMMARY_STATUS_COLORS_[status];
+    return this.statusColor_(status);
+  },
+
+  /**
+   * Русское склонение "N расхождение/расхождения/расхождений" — только
+   * форматирование текста итоговой строки, само число (significantCount)
+   * не меняется этой функцией.
+   */
+  discrepancyLabel_(count) {
+
+    const mod10 = count % 10;
+    const mod100 = count % 100;
+
+    let word;
+
+    if (mod10 === 1 && mod100 !== 11) {
+      word = "расхождение";
+    } else if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) {
+      word = "расхождения";
+    } else {
+      word = "расхождений";
+    }
+
+    return count + " " + word;
+
   },
 
   /**
@@ -630,19 +881,147 @@ const ManagerTeamReport = {
    * попадают на лист вообще; отделы с несколькими отмеченными
    * руководителями попадают как ошибка без анализа (см. STATUS.MULTIPLE_MANAGERS).
    */
+  /**
+   * Лист "Руководитель и команда" удаляется и пересоздается на том же
+   * месте целиком, а не очищается на месте — sheet.clear() (см.
+   * AnalyticsWriter.sheet_) не удаляет группировку строк, и повторное
+   * формирование отчета накапливало бы вложенные группы отделов (см.
+   * тот же прием и его обоснование в ReportBuilder.createReport).
+   */
+  sheet_() {
+
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const existing = spreadsheet.getSheetByName(this.SHEET_NAME);
+
+    if (existing) {
+      const existingIndex = existing.getIndex() - 1; // getIndex() 1-based, insertSheet(index) 0-based
+      spreadsheet.deleteSheet(existing);
+      return spreadsheet.insertSheet(this.SHEET_NAME, existingIndex);
+    }
+
+    return spreadsheet.insertSheet(this.SHEET_NAME);
+
+  },
+
+  /**
+   * Двумерный массив строк для записи на лист — по одной итоговой
+   * строке на отдел (summaryRowNumbers содержит ее номер на листе) и,
+   * сразу под ней, по одной строке на каждую тему отдела (для группировки
+   * — см. write()). Отделы уже отсортированы (build()), темы внутри
+   * отдела тоже — здесь только раскладка в плоский массив колонок,
+   * без пересчета данных.
+   *
+   * @param {Array<Object>} results - build()
+   * @param {Number} startRow - строка листа, где начинается таблица
+   *   (строка заголовка колонок; данные начинаются со startRow + 1)
+   * @returns {{rows: Array<Array>, summaryRowNumbers: Array<Number>,
+   *   groupRanges: Array<{startRow: Number, numRows: Number}>,
+   *   notes: Array<{row: Number, text: String}>}}
+   */
+  buildSheetRows_(results, startRow) {
+
+    const rows = [];
+    const summaryRowNumbers = [];
+    const groupRanges = [];
+    const notes = [];
+
+    results.forEach(department => {
+
+      const summaryRowNumber = startRow + 1 + rows.length;
+      summaryRowNumbers.push(summaryRowNumber);
+
+      if (department.error) {
+
+        rows.push([department.department, department.error, "", "", "", "", ""]);
+        notes.push({
+          row: summaryRowNumber,
+          text: 'Несколько отмеченных руководителей в справочнике "перформанс": ' + department.managerNames.join(", ")
+        });
+        return;
+
+      }
+
+      const overallStatus = this.overallStatusFor_(department.hasComparison, department.significantCount);
+
+      rows.push([
+        department.department,
+        overallStatus,
+        department.hasComparison ? ("Совпало " + department.matchedCount + " из " + department.comparableCount) : "",
+        department.hasComparison ? this.discrepancyLabel_(department.significantCount) : "",
+        "",
+        department.overallWhoScoresHigher,
+        department.teamSize
+      ]);
+
+      if (department.questions.length > 0) {
+
+        const detailStartRow = startRow + 1 + rows.length;
+
+        department.questions.forEach(row => {
+
+          // managerLevel может быть null даже при непустом managerText —
+          // "затрудняюсь ответить"/нераспознанный вариант текст показывают,
+          // но числовую оценку по требованию задачи не считают (см. build).
+          const managerCell = row.managerText
+            ? (row.managerLevel !== null ? row.managerText + " (" + row.managerLevel + ")" : row.managerText)
+            : "";
+          const teamCell = row.teamText ? row.teamText + " (" + row.teamLevel + ")" : "";
+
+          rows.push([
+            row.question,
+            row.status,
+            managerCell,
+            teamCell,
+            row.diff !== null ? Math.abs(row.diff) : "",
+            row.whoScoresHigher,
+            row.teamN
+          ]);
+
+        });
+
+        groupRanges.push({ startRow: detailStartRow, numRows: department.questions.length });
+
+      }
+
+    });
+
+    return { rows: rows, summaryRowNumbers: summaryRowNumbers, groupRanges: groupRanges, notes: notes };
+
+  },
+
+  /**
+   * Записать лист "Руководитель и команда". Строится по 2026 — отдел
+   * берется из ответа респондента, руководитель — из справочника
+   * "перформанс" (см. build). Отделы без отмеченного руководителя не
+   * попадают на лист вообще; отделы с несколькими отмеченными
+   * руководителями попадают как ошибка без анализа (см. STATUS.MULTIPLE_MANAGERS).
+   *
+   * Свернутый список: одна итоговая строка на отдел (см.
+   * buildSheetRows_), под ней — сворачиваемая стандартной группировкой
+   * Google Sheets группа строк с темами этого отдела. Отделы уже
+   * отсортированы build() по числу существенных расхождений, темы
+   * внутри отдела — по модулю расхождения; здесь порядок только
+   * записывается на лист, не пересчитывается.
+   */
   write() {
 
     const prepared = this.prepare_();
-    const results = this.build(prepared.headers, prepared.data, prepared.directory);
+    const results = this.build(
+      prepared.headers,
+      prepared.data,
+      prepared.directory,
+      department => Headcount.divisionOf("2026", department)
+    );
 
-    const sheet = AnalyticsWriter.sheet_(this.SHEET_NAME);
+    const sheet = this.sheet_();
 
-    const numCols = 10;
+    const numCols = 7;
 
     const introStartRow = Formatter.writeSheetIntro(sheet,
       "Как результат руководителя соотносится с его командой",
-      'Один руководитель — это конкретный человек, а не статистическая группа: для него не считается ни значимость, ни доверительный интервал, и он не попадает в "Отклонения срезов"/"Выводы". Средняя оценка и разница считаются при любом числе ответивших сотрудников (n ≥ 1) — маленькие команды не исключаются, но помечаются статусом надежности (n=0 — нет ответов команды; n=1-2 — очень мало данных; n=3-4 — мало данных; n≥' +
-        this.MIN_TEAM_SIZE + ' — достаточно данных). Результаты при n=1-4 — ориентировочное сравнение, а не устойчивый статистический вывод, и не участвуют в автоматических выводах/рейтингах/значимости (см. колонку "Интерпретация"). ВАЖНО: при n=1 средняя оценка команды фактически раскрывает ответ одного конкретного сотрудника — доступ к этому листу должен быть ограничен так же, как к персональным данным. ФИО не выводится нигде на этом листе. Отделы без отмеченного в справочнике "перформанс" руководителя на этот лист не попадают.',
+      'Один руководитель — это конкретный человек, а не статистическая группа: для него не считается ни значимость, ни доверительный интервал, и он не попадает в "Отклонения срезов"/"Выводы". Средняя оценка и разница считаются при любом числе ответивших сотрудников (n ≥ 1) — маленькие команды не исключаются, но помечаются статусом надежности (n=0 — нет ответов команды; n≥' +
+        this.MIN_TEAM_SIZE + ' ИЛИ доля ответивших от всей команды ≥' + Math.round(this.TEAM_COVERAGE_OK_RATIO * 100) +
+        '% — достаточно данных; иначе статус называет обе цифры, например "ответили 4 из 40", а не абстрактное "мало данных" — 4 из 5 человек команды это полноценный результат, а 4 из 40 нет, хотя n одинаковое). Результаты со статусом "ответили N из M" — ориентировочное сравнение, а не устойчивый статистический вывод, и не участвуют в автоматических выводах/значимости (см. колонку "Статус"). ВАЖНО: при n=1 средняя оценка команды фактически раскрывает ответ одного конкретного сотрудника — доступ к этому листу должен быть ограничен так же, как к персональным данным. ФИО не выводится нигде на этом листе. Отделы без отмеченного в справочнике "перформанс" руководителя на этот лист не попадают. Каждый отдел свернут в одну итоговую строку — детализация по темам раскрывается нажатием "+" слева от строки отдела (стандартная группировка строк Google Sheets), отделы отсортированы по убыванию числа существенных расхождений.',
       numCols);
 
     // Блок-обзор сверху — только счетчики по уже посчитанному results,
@@ -667,84 +1046,75 @@ const ManagerTeamReport = {
 
     const startRow = introStartRow + overviewRows.length + 2; // +1 заголовок обзора, +1 пустая строка
 
-    const header = ["Управление", "Отдел", "Вопрос", "Оценка руководителя", "Средняя оценка сотрудников",
-      "n сотрудников", "Разница", "Интерпретация", "Приоритет", "Статус надёжности"];
+    // Один общий заголовок колонок на весь лист — строки детализации
+    // используют те же колонки, что и итоговая строка отдела (см.
+    // buildSheetRows_): для итоговой строки "Руководитель"/"Команда"
+    // содержат "Совпало X из Y"/"N расхождений", для строки темы —
+    // фактические оценку руководителя/команды по этой теме.
+    const header = ["Отдел / Тема", "Статус", "Руководитель", "Команда", "Расхождение", "Кто в целом оценивает выше", "n команды"];
 
-    const rows = [];
+    const built = this.buildSheetRows_(results, startRow);
 
-    results.forEach(department => {
-
-      if (department.error) {
-        rows.push([
-          department.division,
-          department.department,
-          'Несколько отмеченных руководителей в справочнике "перформанс": ' + department.managerNames.join(", "),
-          "", "", "", "", "", "",
-          department.error
-        ]);
-        return;
-      }
-
-      department.questions.forEach(row => {
-
-        // managerLevel может быть null даже при непустом managerText —
-        // "затрудняюсь ответить"/нераспознанный вариант текст показывают,
-        // но числовую оценку по требованию задачи не считают (см. build).
-        const managerCell = row.managerText
-          ? (row.managerLevel !== null ? row.managerText + " (" + row.managerLevel + ")" : row.managerText)
-          : "";
-        const teamCell = row.teamText ? row.teamText + " (" + row.teamLevel + ")" : "";
-
-        rows.push([
-          department.division,
-          department.department,
-          row.question,
-          managerCell,
-          teamCell,
-          row.teamN,
-          row.diff !== null ? row.diff : "",
-          row.interpretation,
-          row.priority,
-          row.status
-        ]);
-
-      });
-
-    });
-
-    AnalyticsWriter.dump_(sheet, header, rows,
-      [190, 260, 220, 190, 210, 100, 90, 340, 100, 220], startRow, [
-        [3, "Ближайший текстовый вариант ответа руководителя и Уровень 0-100 (Norms.normalizeLevel) в скобках — один человек, не среднее. Если руководитель выбрал «Затрудняюсь ответить»/«Не пользовался» или ячейка содержит нераспознанный текст, число в скобках не показывается — см. колонку \"Статус надёжности\"."],
-        [4, "Ближайшая текстовая категория среднего ответа команды и Уровень 0-100 в скобках — считается при любом n ≥ 1, надежность см. в колонке \"Статус надёжности\"."],
-        [7, "Автоматический вывод по разнице (Оценка руководителя − Средняя оценка команды) на шкале 0-100: не является оценкой эффективности руководителя, только поиск расхождений восприятия. Считается только при статусе «" +
-          this.STATUS.OK + "» (n ≥ " + this.MIN_TEAM_SIZE + ") — при меньшем n, а также при «" + this.STATUS.MANAGER_UNCERTAIN +
-          "»/«" + this.STATUS.MANAGER_NOT_USED + "»/«" + this.STATUS.MANAGER_UNRECOGNIZED + "» не участвует в автоматическом выводе."],
-        [8, "Техническое поле для сортировки строк внутри отдела (Высокий → Средний → Низкий), колонка скрыта."],
-        [9, "«" + this.STATUS.MANAGER_DID_NOT_ANSWER + "» — руководитель не найден среди ответов своего отдела; «" +
-          this.STATUS.MANAGER_SKIPPED_QUESTION + "» — руководитель ответил в опросе, но ячейка по этому вопросу пуста; «" +
-          this.STATUS.MANAGER_UNCERTAIN + "» — руководитель осознанно выбрал «Затрудняюсь ответить» (это не пропуск вопроса, числовая оценка по методике не считается); «" +
-          this.STATUS.MANAGER_NOT_USED + "» — руководитель осознанно выбрал «Не пользовался» (тоже не пропуск вопроса, числовая оценка не считается); «" +
-          this.STATUS.MANAGER_UNRECOGNIZED + "» — ячейка непустая, но текст не входит в известные варианты ответа (см. текст в колонке \"Оценка руководителя\" и поправьте справочник вариантов); «" +
-          this.STATUS.NO_TEAM_ANSWERS + "» (n=0), «" + this.STATUS.VERY_LOW_TEAM + "» (n=1-2), «" + this.STATUS.LOW_TEAM +
-          "» (n=3-4) — команда ответила, но выборка маленькая, сравнение ориентировочное; «" + this.STATUS.OK +
-          "» (n≥" + this.MIN_TEAM_SIZE + ") — можно сравнивать уверенно; «" + this.STATUS.MULTIPLE_MANAGERS +
-          "» — в справочнике \"перформанс\" в этом отделе отмечено больше одного руководителя."]
+    AnalyticsWriter.dump_(sheet, header, built.rows,
+      [260, 220, 230, 230, 110, 170, 90], startRow, [
+        [0, "Итоговая строка — название отдела (свернуто по умолчанию, раскрыть — «+» слева). Строка темы — конкретный вопрос анкеты."],
+        [1, "Итоговая строка — общий статус отдела: «" + this.SUMMARY_STATUS.CLOSE + "», «" + this.SUMMARY_STATUS.DISCREPANCIES +
+          "» или «" + this.SUMMARY_STATUS.INSUFFICIENT + "» (сравнение невозможно — это не то же самое, что «0 расхождений»). Строка темы — статус надежности этой темы, см. подсказку колонки \"Кто в целом оценивает выше\" ниже."],
+        [2, "Итоговая строка — «Совпало X из Y»: X тем без существенного расхождения из Y тем с полностью надежным сравнением (статус «" +
+          this.STATUS.OK + "»). Строка темы — ближайший текстовый вариант ответа руководителя и Уровень 0-100 в скобках."],
+        [3, "Итоговая строка — количество тем с существенным расхождением. Строка темы — ближайшая текстовая категория среднего ответа команды и Уровень 0-100 в скобках."],
+        [4, "Строка темы — модуль разницы (|Оценка руководителя − Средняя оценка команды|) на шкале 0-100; направление — в колонке \"Кто в целом оценивает выше\"."],
+        [5, "Итоговая строка — сравнение средней оценки руководителя со средней оценкой команды по темам, где присутствуют обе оценки (отсутствующие оценки не учитываются и не приравниваются к нулю): «" +
+          this.OVERALL_WHO_HIGHER.MANAGER + "», «" + this.OVERALL_WHO_HIGHER.TEAM + "», «" + this.OVERALL_WHO_HIGHER.EQUAL +
+          "» (расхождение в пределах ±" + this.INTERPRETATION_THRESHOLDS.SMALL_DIFF + " на шкале 0-100) или «" + this.OVERALL_WHO_HIGHER.INSUFFICIENT +
+          "» (нет ни одной темы с обеими оценками). Строка темы — «" + this.WHO_HIGHER.MANAGER + "»/«" +
+          this.WHO_HIGHER.TEAM + "»/«" + this.WHO_HIGHER.EQUAL + "» — у кого выше числовая оценка по этой теме; пусто, если числовое сравнение невозможно (см. статус в колонке \"Статус\": «" +
+          this.STATUS.MANAGER_DID_NOT_ANSWER + "», «" + this.STATUS.MANAGER_SKIPPED_QUESTION + "», «" + this.STATUS.MANAGER_UNCERTAIN +
+          "», «" + this.STATUS.MANAGER_NOT_USED + "», «" + this.STATUS.MANAGER_UNRECOGNIZED + "» или «" + this.STATUS.NO_TEAM_ANSWERS + "»)."],
+        [6, "Итоговая строка — размер команды отдела. Строка темы — сколько сотрудников ответили именно на эту тему (n может быть меньше размера команды)."]
       ]);
 
     // Пакетное форматирование: один массив цветов на весь диапазон и
     // один вызов setBackgrounds — вместо getRange().setBackground()
-    // построчно в цикле. Цвет определяется по статусу (см. STATUS_COLORS_/
-    // statusColor_) — n=0 серый, n=1-2 оранжевый, n=3-4 желтый, n>=5 без
-    // заливки, несколько руководителей — красная ошибка.
-    if (rows.length) {
-
-      const backgrounds = rows.map(row => [this.statusColor_(row[9])]);
-
-      sheet.getRange(startRow + 1, 10, rows.length, 1).setBackgrounds(backgrounds);
-
+    // построчно в цикле. Один и тот же столбец "Статус" переиспользуется
+    // и итоговой строкой отдела (см. SUMMARY_STATUS_COLORS_), и строкой
+    // темы (см. STATUS_COLORS_) — rowStatusColor_ различает их сама.
+    if (built.rows.length) {
+      const backgrounds = built.rows.map(row => [this.rowStatusColor_(row[1])]);
+      sheet.getRange(startRow + 1, 2, built.rows.length, 1).setBackgrounds(backgrounds);
     }
 
-    sheet.hideColumns(9);
+    // Итоговые строки отделов — полужирный шрифт и легкая нейтральная
+    // заливка (см. Formatter.STRIPE_BG — тот же цвет, что и в остальных
+    // отчетах проекта, новая палитра не вводится), одним вызовом через
+    // getRangeList вместо построчного форматирования.
+    if (built.summaryRowNumbers.length) {
+      const summaryA1 = built.summaryRowNumbers.map(row => "A" + row + ":G" + row);
+      sheet.getRangeList(summaryA1)
+        .setFontWeight("bold")
+        .setBackground(Formatter.STRIPE_BG)
+        .setBorder(false, false, true, false, false, false, "#cccccc", SpreadsheetApp.BorderStyle.SOLID);
+    }
+
+    built.notes.forEach(note => {
+      sheet.getRange(note.row, 1).setNote(note.text);
+    });
+
+    // Toggle "+/-" должен относиться к строке отдела (стоять на ней),
+    // а не появляться после последней темы — иначе визуально неясно, к
+    // какому отделу относится раскрытие (см. требование задачи).
+    sheet.setRowGroupControlPosition(SpreadsheetApp.GroupControlTogglePosition.BEFORE);
+
+    // Группировка создается уже после того, как все строки записаны и
+    // отсортированы (см. buildSheetRows_) — каждый диапазон строго внутри
+    // одного отдела (groupRanges), итоговая строка отдела в диапазон не
+    // входит. Лист каждый раз пересоздается заново (см. sheet_()), поэтому
+    // здесь не может накопиться вложенная/задвоенная группировка с
+    // прошлого формирования отчета.
+    built.groupRanges.forEach(range => {
+      Formatter.groupRows(sheet, range.startRow, range.numRows, true);
+    });
+
     sheet.setHiddenGridlines(true);
 
   }

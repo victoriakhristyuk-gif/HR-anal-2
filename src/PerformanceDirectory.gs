@@ -263,6 +263,74 @@ const PerformanceDirectory = {
   },
 
   /**
+   * Численность "приглашенных" для срезов "Соответствие ожиданиям"/
+   * "Грейд" — считается по самому справочнику "перформанс" (ВСЕ
+   * сотрудники с заполненным полем), а не по ответившим на опрос:
+   * задача явно требует включать в знаменатель тех, кто анкету не
+   * заполнял, если поле справочника у них заполнено.
+   *
+   * Знаменатель поддерживает фильтр отчета только по "Отдел" —
+   * единственное поле, которое есть и в анкете (для FilterEngine), и в
+   * справочнике "перформанс". При любом другом активном фильтре (Город,
+   * Стаж, ...) точное соответствие построить нельзя — знаменатель
+   * считается недоступным, как и для Headcount.invitedForFilters у
+   * "Отдел"/"Управление"/"Группа команд".
+   *
+   * @param {String} fieldTitle - COLUMNS.EXPECTATIONS | COLUMNS.GRADE
+   * @param {Array<Object>} filters
+   * @returns {{counts: Object, total: Number|null, supported: Boolean}}
+   *   counts — normalizeText_(значение) → количество сотрудников.
+   */
+  countsForFilters(fieldTitle, filters) {
+
+    let directory;
+
+    try {
+      directory = this.load();
+    } catch (error) {
+      return { counts: {}, total: null, supported: false };
+    }
+
+    const active = (filters || []).filter(filter => {
+      if (Array.isArray(filter.values)) return filter.values.length > 0;
+      return filter.value !== "" && filter.value !== null && filter.value !== undefined;
+    });
+
+    const supported = active.every(
+      filter => this.normalizeText_(filter.question) === this.normalizeText_(this.COLUMNS.DEPARTMENT)
+    );
+
+    if (!supported) return { counts: {}, total: null, supported: false };
+
+    let departmentKeys = null;
+
+    active.forEach(filter => {
+      departmentKeys = {};
+      (filter.values || []).forEach(value => { departmentKeys[this.normalizeText_(value)] = true; });
+    });
+
+    const field = fieldTitle === this.COLUMNS.GRADE ? "grade" : "expectations";
+    const counts = {};
+    let total = 0;
+
+    Object.keys(directory.byKey).forEach(key => {
+
+      const entry = directory.byKey[key];
+
+      if (!entry[field]) return;
+      if (departmentKeys && !departmentKeys[this.normalizeText_(entry.department)]) return;
+
+      const valueKey = this.normalizeText_(entry[field]);
+      counts[valueKey] = (counts[valueKey] || 0) + 1;
+      total += 1;
+
+    });
+
+    return { counts: counts, total: total, supported: true };
+
+  },
+
+  /**
    * Присоединить справочник к уже прочитанным строкам "Ответы 2026".
    * Чистая функция — не трогает SpreadsheetApp и не мутирует входные
    * headers/rows. НЕ бросает исключение на проблемах сопоставления

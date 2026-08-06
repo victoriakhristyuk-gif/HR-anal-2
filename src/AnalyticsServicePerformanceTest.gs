@@ -16,6 +16,7 @@ function testAnalyticsServicePerformance_runAll() {
 
   const tests = [
     testAnalyticsServicePerformance_addsPerformanceDimensionsFor2026_,
+    testAnalyticsServicePerformance_incompleteHeadcountDoesNotBlock_,
     testAnalyticsServicePerformance_noPerformanceDimensionsForOtherYears_,
     testAnalyticsServicePerformance_performanceDimensionsHaveNoHistory_,
     testAnalyticsServicePerformance_performanceDimensionsExcludedFromComposition_
@@ -67,6 +68,15 @@ function aspRows2026_() {
   ];
 }
 
+function aspHeadcountRows_() {
+  return [
+    { year: "2025", departmentId: "sites", division: "Управление", department: "Отдел разработки сайтов", count: 5, row: 2 },
+    { year: "2025", departmentId: "testing", division: "Управление", department: "Отдел тестирования ПО", count: 4, row: 3 },
+    { year: "2026", departmentId: "sites", division: "Управление", department: "Отдел разработки сайтов", count: 6, row: 4 },
+    { year: "2026", departmentId: "testing", division: "Управление", department: "Отдел тестирования ПО", count: 5, row: 5 }
+  ];
+}
+
 /**
  * Подменяет loadEnrichedSurveyData_ фикстурой: для "2026" отдает
  * обогащенные строки (включая "Соответствие ожиданиям"/"Грейд"), для
@@ -77,6 +87,11 @@ function aspRows2026_() {
 function withAnalyticsServiceFixture_(fn) {
 
   const original = loadEnrichedSurveyData_;
+  const originalHeadcountRows = Headcount.rowsCache_;
+  const originalHeadcountDirectory = Headcount.directory_;
+
+  Headcount.rowsCache_ = aspHeadcountRows_();
+  Headcount.directory_ = null;
 
   loadEnrichedSurveyData_ = function (source, includeData) {
     if (source === "2026") {
@@ -89,6 +104,8 @@ function withAnalyticsServiceFixture_(fn) {
     fn();
   } finally {
     loadEnrichedSurveyData_ = original;
+    Headcount.rowsCache_ = originalHeadcountRows;
+    Headcount.directory_ = originalHeadcountDirectory;
   }
 
 }
@@ -107,9 +124,52 @@ function testAnalyticsServicePerformance_addsPerformanceDimensionsFor2026_() {
 
 }
 
+function testAnalyticsServicePerformance_incompleteHeadcountDoesNotBlock_() {
+
+  const originalDataLoader = loadEnrichedSurveyData_;
+  const originalHeadcountLoader = Headcount.loadRows_;
+
+  Headcount.resetCache_();
+  Headcount.loadRows_ = function () {
+    throw new Error("строка 2: численность пока не заполнена");
+  };
+  loadEnrichedSurveyData_ = function (source, includeData) {
+    if (source === "2026") {
+      return {
+        source: "Ответы 2026",
+        rows: 3,
+        columns: ASP_HEADERS_.length,
+        headers: ASP_HEADERS_,
+        data: aspRows2026_()
+      };
+    }
+    throw new Error('Лист "Ответы 2025" не найден');
+  };
+
+  try {
+    const analytics = AnalyticsService.build("2026", "2025", []);
+    const department = analytics.segments.find(item => item.dimension === "Отдел");
+
+    assertASPEquals_(analytics.meta.n, 3, "все ответы вошли в расширенную аналитику");
+    assertASPTrue_(!!department, "срез по отделам построен без численности");
+    assertASPEquals_(department.company.headcount, undefined, "численность не подставлена");
+    assertASPEquals_(department.company.responseRatePercent, undefined, "явка не рассчитывается");
+  } finally {
+    loadEnrichedSurveyData_ = originalDataLoader;
+    Headcount.loadRows_ = originalHeadcountLoader;
+    Headcount.resetCache_();
+  }
+
+}
+
 function testAnalyticsServicePerformance_noPerformanceDimensionsForOtherYears_() {
 
   const original = loadEnrichedSurveyData_;
+  const originalHeadcountRows = Headcount.rowsCache_;
+  const originalHeadcountDirectory = Headcount.directory_;
+
+  Headcount.rowsCache_ = aspHeadcountRows_();
+  Headcount.directory_ = null;
 
   loadEnrichedSurveyData_ = function (source, includeData) {
     return { source: source, rows: 3, columns: ASP_HEADERS_.length, headers: ASP_HEADERS_, data: aspRows2026_() };
@@ -128,6 +188,8 @@ function testAnalyticsServicePerformance_noPerformanceDimensionsForOtherYears_()
 
   } finally {
     loadEnrichedSurveyData_ = original;
+    Headcount.rowsCache_ = originalHeadcountRows;
+    Headcount.directory_ = originalHeadcountDirectory;
   }
 
 }

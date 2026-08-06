@@ -177,6 +177,8 @@ const BatchReports = {
       ok: true,
       sheetName: result.sheetName,
       employees: result.employees,
+      headcount: result.headcount,
+      responseRatePercent: result.responseRatePercent,
       filters: result.filters,
       summaryError: result.summaryError,
       // Признак когорты и ее размер — для отображения в Sidebar

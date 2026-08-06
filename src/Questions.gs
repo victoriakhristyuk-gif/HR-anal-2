@@ -16,6 +16,14 @@ const Questions = {
     // которые можно свести в таблицу распределения — как срез он
     // участвует через отдельный список dimensions в AnalyticsService.
     { column: null, title: "Управление", type: "single", group: "Профиль", subgroup: "Управление", report: false, filter: true, average: false, display: "❌", compare: false, answers: "Управление разработки ПО\nИТ-управление\nНе отнесено к управлению" },
+    // "Группа команд" — тоже не колонка анкеты: значение — сочетание
+    // "Управление + Тип команды" отдела (см. Headcount.teamGroupOf), не
+    // просто "Тип команды" — одинаковое название типа команды в разных
+    // управлениях не должно объединяться в одну группу. Поле в листе
+    // "Численность" необязательное, поэтому вариантов заранее не
+    // фиксируем (answers: "") — они читаются динамически из справочника
+    // для выбранного года (см. Filters.getValueOptions, Headcount.listTeamGroups).
+    { column: null, title: "Группа команд", type: "single", group: "Профиль", subgroup: "Группа команд", report: false, filter: true, average: false, display: "❌", compare: false, answers: "" },
     { column: "D", title: "Стаж", type: "single", group: "Профиль", subgroup: "Стаж", report: true, filter: true, average: false, display: "Распределение", compare: true, answers: "менее 3х месяцев; от 3х месяцев до 1 года; от 1 года до 3х лет; от 3х до 6 лет; от 6 до 10 лет; более 10 лет" },
     { column: "E", title: "Формат работы", type: "single", group: "Профиль", subgroup: "Формат", report: true, filter: true, average: false, display: "Распределение", compare: true, answers: "полностью удаленно; полностью из офиса; в гибридном (удаленка/офис)" },
     { column: "F", title: "Рабочий стол", type: "rating5", group: "Офис", subgroup: "Рабочее место", report: true, filter: true, average: true, display: "Распределение", compare: true, answers: "1, 2, 3, 4, 5, не пользовался" },
@@ -64,8 +72,18 @@ const Questions = {
     // отдельных срезах "Соответствие ожиданиям"/"Грейд" (AnalyticsService.build).
     // performanceOnly:true — маркер для гейтинга по источнику
     // (Filters.getFilterableQuestions, ReportService "Сравнить с 2025").
-    { column: null, title: "Соответствие ожиданиям", type: "single", group: "Перформанс", subgroup: "Перформанс", report: false, filter: true, average: false, display: "❌", compare: false, performanceOnly: true, answers: "" },
-    { column: null, title: "Грейд", type: "single", group: "Перформанс", subgroup: "Перформанс", report: false, filter: true, average: false, display: "❌", compare: false, performanceOnly: true, answers: "" },
+    // display:"Топ 5" — значения не фиксированы заранее (в отличие от
+    // остальных вопросов каталога, answers:"" — как и "Группа команд"),
+    // поэтому распределение считается тем же динамическим подсчетом
+    // частот, что и у открытых вопросов (Statistics.calculateAnswerFrequencies/
+    // selectTopAnswers), а не по фиксированному Statistics.getDistributionOrder_.
+    // Раздел "Состав выборки" (ReportSections.gs) показывает эти два поля,
+    // только если в выборке отчета вообще есть теги справочника
+    // "перформанс" (см. ReportBuilder.renderQuestionBlock_ — вопрос с
+    // performanceOnly пропускается целиком, если items пуст, например
+    // для источника "Ответы 2025" или несопоставленной выборки).
+    { column: null, title: "Соответствие ожиданиям", type: "single", group: "Перформанс", subgroup: "Перформанс", report: false, filter: true, average: false, display: "Топ 5", compare: false, performanceOnly: true, answers: "" },
+    { column: null, title: "Грейд", type: "single", group: "Перформанс", subgroup: "Перформанс", report: false, filter: true, average: false, display: "Топ 5", compare: false, performanceOnly: true, answers: "" },
     { column: null, title: "Роль в отделе", type: "single", group: "Перформанс", subgroup: "Перформанс", report: false, filter: true, average: false, display: "❌", compare: false, performanceOnly: true, answers: "Руководитель отдела; Сотрудник отдела" }
   ],
 
