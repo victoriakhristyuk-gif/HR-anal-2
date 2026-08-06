@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 16px;
+      }
+
+      h1 {
+        font-size: 18px;
+        margin: 0 0 16px;
+      }
+
+      h2 {
+        font-size: 16px;
+        margin: 0 0 12px;
+      }
+
+      p {
+        margin: 0 0 16px;
+      }
+
+      label {
+        display: block;
+        margin-bottom: 4px;
+        font-weight: bold;
+      }
+
+      select,
+      input[type="number"] {
+        width: 100%;
+        padding: 6px;
+        margin-bottom: 12px;
+        box-sizing: border-box;
+      }
+
+      select[multiple] {
+        min-height: 100px;
+      }
+
+      button {
+        padding: 8px 16px;
+        cursor: pointer;
+        margin-bottom: 8px;
+      }
+
+      #surveyInfo,
+      #filtersError {
+        margin-top: 8px;
+      }
+
+      .error {
+        color: red;
+      }
+
+      .filters-block {
+        margin-bottom: 16px;
+      }
+
+      .filter-item {
+        border: 1px solid #ccc;
+        padding: 8px;
+        margin-bottom: 8px;
+      }
+
+      .filter-item .filter-title {
+        font-weight: bold;
+      }
+
+      .operator-row {
+        display: flex;
+        gap: 8px;
+      }
+
+      .operator-row select,
+      .operator-row input {
+        margin-bottom: 0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>HR Analytics</h1>
+
+    <label for="dataSource">Источник данных:</label>
+    <select id="dataSource">
+      <option value="2025">Ответы 2025</option>
+      <option value="2026">Ответы 2026</option>
+    </select>
+
+    <div class="filters-block">
+      <h2>Фильтры</h2>
+
+      <label for="questionSelect">Вопрос</label>
+      <select id="questionSelect"></select>
+
+      <div id="filterEditor"></div>
+
+      <button type="button" id="addFilterBtn">+ Добавить фильтр</button>
+      <button type="button" id="resetFiltersBtn">Сбросить фильтры</button>
+
+      <div id="activeFilters"></div>
+
+      <div id="filtersError"></div>
+    </div>
+
+    <p>Проект успешно запущен.</p>
+    <button type="button" id="buildReportBtn">Создать отчет</button>
+    <br>
+    <button type="button" id="checkDataBtn">Проверить данные</button>
+    <div id="surveyInfo"></div>
+
+    <script>
+      var filterQuestions = [];
+      var activeFilters = [];
+
+      function isOperatorType(type) {
+        return type === 'rating5' || type === 'enps';
+      }
+
+      function findQuestion(name) {
+        return filterQuestions.filter(function(q) {
+          return q.question === name;
+        })[0];
+      }
+
+      function renderQuestionSelect() {
+        var select = document.getElementById('questionSelect');
+        select.innerHTML = '';
+
+        filterQuestions.forEach(function(q) {
+          var option = document.createElement('option');
+          option.value = q.question;
+          option.textContent = q.question;
+          select.appendChild(option);
+        });
+      }
+
+      function renderFilterEditor() {
+        var editor = document.getElementById('filterEditor');
+        editor.innerHTML = '';
+
+        var selectedName = document.getElementById('questionSelect').value;
+        var question = findQuestion(selectedName);
+
+        if (!question) {
+          return;
+        }
+
+        if (isOperatorType(question.type)) {
+          var row = document.createElement('div');
+          row.className = 'operator-row';
+
+          var operatorSelect = document.createElement('select');
+          operatorSelect.className = 'filterOperator';
+          question.operators.forEach(function(op) {
+            var option = document.createElement('option');
+            option.value = op;
+            option.textContent = op;
+            operatorSelect.appendChild(option);
+          });
+
+          var valueInput = document.createElement('input');
+          valueInput.type = 'number';
+          valueInput.className = 'filterValue';
+
+          row.appendChild(operatorSelect);
+          row.appendChild(valueInput);
+          editor.appendChild(row);
+        } else {
+          var optionsSelect = document.createElement('select');
+          optionsSelect.className = 'filterOptions';
+          optionsSelect.multiple = true;
+
+          question.options.forEach(function(value) {
+            var option = document.createElement('option');
+            option.value = value;
+            option.textContent = value;
+            optionsSelect.appendChild(option);
+          });
+
+          editor.appendChild(optionsSelect);
+        }
+      }
+
+      function renderActiveFilters() {
+        var container = document.getElementById('activeFilters');
+        container.innerHTML = '';
+
+        activeFilters.forEach(function(filter) {
+          var block = document.createElement('div');
+          block.className = 'filter-item';
+
+          var title = document.createElement('span');
+          title.className = 'filter-title';
+          title.textContent = filter.question + ': ';
+          block.appendChild(title);
+
+          var details = isOperatorType(filter.type)
+            ? filter.operator + ' ' + filter.value
+            : filter.values.join(', ');
+
+          block.appendChild(document.createTextNode(details));
+          container.appendChild(block);
+        });
+      }
+
+      function addFilterFromEditor() {
+        var selectedName = document.getElementById('questionSelect').value;
+        var question = findQuestion(selectedName);
+
+        if (!question) {
+          return;
+        }
+
+        var errorEl = document.getElementById('filtersError');
+        errorEl.className = '';
+        errorEl.textContent = '';
+
+        if (isOperatorType(question.type)) {
+          var operator = document.querySelector('.filterOperator').value;
+          var rawValue = document.querySelector('.filterValue').value;
+
+          if (rawValue === '') {
+            errorEl.className = 'error';
+            errorEl.textContent = 'Укажите значение для фильтра.';
+            return;
+          }
+
+          activeFilters.push({
+            question: question.question,
+            type: question.type,
+            operator: operator,
+            value: Number(rawValue)
+          });
+        } else {
+          var optionsSelect = document.querySelector('.filterOptions');
+          var values = Array.from(optionsSelect.selectedOptions).map(function(o) {
+            return o.value;
+          });
+
+          if (values.length === 0) {
+            errorEl.className = 'error';
+            errorEl.textContent = 'Выберите хотя бы одно значение.';
+            return;
+          }
+
+          activeFilters.push({
+            question: question.question,
+            type: question.type,
+            values: values
+          });
+        }
+
+        renderActiveFilters();
+      }
+
+      // ----- ИСПРАВЛЕННАЯ ФУНКЦИЯ СБРОСА -----
+      function resetFilters() {
+        // Сброс активных фильтров
+        activeFilters = [];
+
+        // Сброс источника данных на 2025
+        document.getElementById('dataSource').value = '2025';
+
+        // Сброс выпадающего списка вопросов на первый элемент
+        var select = document.getElementById('questionSelect');
+        if (select.options.length > 0) {
+          select.selectedIndex = 0;
+        }
+
+        // Очистка информационного блока
+        document.getElementById('surveyInfo').innerHTML = '';
+        document.getElementById('surveyInfo').className = '';
+
+        // Очистка сообщения об ошибке
+        document.getElementById('filtersError').textContent = '';
+        document.getElementById('filtersError').className = '';
+
+        // Перерисовка активных фильтров (пусто)
+        renderActiveFilters();
+
+        // Перерисовка редактора фильтра под выбранный (первый) вопрос
+        renderFilterEditor();
+      }
+      // ----------------------------------------------
+
+      document.getElementById('questionSelect').addEventListener('change', renderFilterEditor);
+      document.getElementById('addFilterBtn').addEventListener('click', addFilterFromEditor);
+      document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
+
+      document.getElementById('buildReportBtn').addEventListener('click', function () {
+
+        var source = document.getElementById('dataSource').value;
+        var infoEl = document.getElementById('surveyInfo');
+        infoEl.className = '';
+        infoEl.textContent = 'Построение отчета...';
+
+        google.script.run
+          .withSuccessHandler(function(result) {
+
+            var filtersText = result.filters.length
+              ? result.filters.map(formatFilterText).join('; ')
+              : 'Без фильтров';
+
+            infoEl.innerHTML =
+              '<b>Предпросмотр выборки</b><br><br>' +
+              'Источник: ' + result.source + '<br>' +
+              'Количество сотрудников: ' + result.employees + '<br><br>' +
+              'Фильтры: ' + filtersText;
+
+          })
+          .withFailureHandler(function(error) {
+            infoEl.className = 'error';
+            infoEl.textContent = error.message;
+          })
+          .buildReportFromSidebar(source, activeFilters);
+
+      });
+
+      document.getElementById('checkDataBtn').addEventListener('click', function() {
+        var infoEl = document.getElementById('surveyInfo');
+        var source = document.getElementById('dataSource').value;
+
+        infoEl.className = '';
+        infoEl.textContent = 'Загрузка...';
+
+        google.script.run
+          .withSuccessHandler(function(result) {
+            infoEl.className = '';
+            infoEl.innerHTML =
+              'Источник: ' + result.source + '<br>' +
+              'Строк: ' + result.rows + '<br>' +
+              'Столбцов: ' + result.columns;
+          })
+          .withFailureHandler(function(error) {
+            infoEl.className = 'error';
+            infoEl.textContent = error.message;
+          })
+          .getSurveyInfo(source);
+      });
+
+      // Форматирование фильтра для отображения
+      function formatFilterText(filter) {
+        return isOperatorType(filter.type)
+          ? filter.question + ' ' + filter.operator + ' ' + filter.value
+          : filter.question + '=' + filter.values.join(', ');
+      }
+
+      // Загрузка списка фильтруемых вопросов при старте
+      google.script.run
+        .withSuccessHandler(function(questions) {
+          filterQuestions = questions;
+          renderQuestionSelect();
+          renderFilterEditor();
+        })
+        .withFailureHandler(function(error) {
+          var errorEl = document.getElementById('filtersError');
+          errorEl.className = 'error';
+          errorEl.textContent = error.message;
+        })
+        .getFilterableQuestions();
+    </script>
+  </body>
+</html>
