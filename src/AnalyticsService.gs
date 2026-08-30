@@ -26,6 +26,32 @@
 
 const AnalyticsService = {
 
+  // Кэш company-wide (без фильтров) сборки на время одного выполнения
+  // скрипта — только для buildCached_ ниже. Публичный build() его не
+  // трогает и всегда считает заново (нужен AnalyticsWriter с любыми
+  // фильтрами). Ключ — "sourceYear|previousYear".
+  _cache_: {},
+
+  /**
+   * Company-wide (без фильтров) аналитика, посчитанная не более одного
+   * раза за выполнение скрипта. Нужна SegmentContext: BatchReports может
+   * вызвать buildReport в цикле по десятку значений одного фильтра, и
+   * без кэша company-wide срезы (векторизация + 8 измерений) пересчитывались
+   * бы заново на каждой итерации ради одного и того же неотфильтрованного
+   * результата.
+   */
+  buildCached_(sourceYear, previousYear) {
+
+    const key = sourceYear + "|" + previousYear;
+
+    if (!this._cache_[key]) {
+      this._cache_[key] = this.build(sourceYear, previousYear, []);
+    }
+
+    return this._cache_[key];
+
+  },
+
   /**
    * @param {String} sourceYear - '2026'
    * @param {String} previousYear - '2025'
@@ -37,16 +63,18 @@ const AnalyticsService = {
 
     // ---------- 1. Данные ----------
 
-    const survey = loadSurveyData(sourceYear, true);
+    const survey = loadEnrichedSurveyData_(sourceYear, true);
     const headers = survey.headers;
-    const rows = FilterEngine.applyFilters(survey.data, headers, filters);
+    const rows = FilterEngine.applyFilters(survey.data, headers, filters, sourceYear);
 
     let previousRows = [];
+    let previousHeaders = headers;
     let hasPrevious = false;
 
     try {
-      const previousSurvey = loadSurveyData(previousYear, true);
-      previousRows = FilterEngine.applyFilters(previousSurvey.data, previousSurvey.headers, filters);
+      const previousSurvey = loadEnrichedSurveyData_(previousYear, true);
+      previousHeaders = previousSurvey.headers;
+      previousRows = FilterEngine.applyFilters(previousSurvey.data, previousHeaders, filters, previousYear);
       hasPrevious = true;
     } catch (error) {
       hasPrevious = false;
@@ -62,7 +90,7 @@ const AnalyticsService = {
     questions.forEach(question => {
       vectors[question.title] = Scoring.vector(rows, headers, question);
       if (hasPrevious) {
-        previousVectors[question.title] = Scoring.vector(previousRows, headers, question);
+        previousVectors[question.title] = Scoring.vector(previousRows, previousHeaders, question);
       }
     });
 
@@ -71,8 +99,24 @@ const AnalyticsService = {
 
     // ---------- 3–6. Светофор по каждому вопросу ----------
 
+    // Численность выбирается отдельно для каждого года. Процент явки
+    // считается только для выборок без фильтров либо с фильтрами по
+    // отделу/управлению/группе команд: для прочих признаков знаменателя
+    // на листе нет. Те же scope дают N для поправки на конечную
+    // совокупность (FPC, см. MathStats.finitePopulationCorrection) в
+    // светофоре ниже — populationSize не передается, если scope не
+    // поддержан (текущий набор фильтров не сводится к одному отделу/
+    // управлению/группе команд), тогда FPC не применяется.
+    const headcountScope = Headcount.invitedForFilters(sourceYear, filters);
+    const previousHeadcountScope = Headcount.invitedForFilters(previousYear, filters);
+    const includeHeadcount = headcountScope.supported && Headcount.hasYear(sourceYear);
+    const includePreviousHeadcount = hasPrevious && previousHeadcountScope.supported &&
+      Headcount.hasYear(previousYear);
+
     const trafficLight = this.trafficLight_(
-      questions, vectors, previousVectors, rows, previousRows, headers, hasPrevious
+      questions, vectors, previousVectors, rows, previousRows, headers, previousHeaders, hasPrevious,
+      includeHeadcount ? headcountScope.count : null,
+      includePreviousHeadcount ? previousHeadcountScope.count : null
     );
 
     // ---------- 5. Когорта ----------
@@ -81,12 +125,12 @@ const AnalyticsService = {
 
     if (hasPrevious) {
 
-      const matched = Cohort.build(rows, previousRows, headers);
+      const matched = Cohort.build(rows, previousRows, headers, previousHeaders);
 
       cohort = {
         info: matched,
-        enps: Cohort.enpsChange(matched, headers, questions),
-        changes: Cohort.changes(matched, headers, questions)
+        enps: Cohort.enpsChange(matched, headers, previousHeaders, questions),
+        changes: Cohort.changes(matched, headers, previousHeaders, questions)
       };
 
     }
@@ -109,24 +153,86 @@ const AnalyticsService = {
       { title: "Формат работы", normalizer: null },
       { title: "Стаж", normalizer: null },
       { title: "Город", normalizer: Segments.cityNormalizer() },
-      { title: "Отдел", normalizer: null }
+      { title: "Отдел", normalizer: null },
+      { title: "Управление", normalizer: null },
+      { title: "Группа команд", normalizer: null }
     ];
 
-    const segments = dimensions.map(dimension => Segments.analyze(
-      rows, headers, questions, dimension.title,
-      {
-        normalizer: dimension.normalizer,
-        previousRows: hasPrevious ? previousRows : null
-      }
+    // "Соответствие ожиданиям" и "Grade" существуют только в 2026
+    // (обогащение справочником "перформанс" — см. PerformanceDirectory.gs).
+    // Срезы добавляются только для отчета за 2026 и ВСЕГДА без
+    // прошлогодних строк (noHistory), даже если для остальных срезов
+    // hasPrevious=true: подставлять сюда 2025 нельзя — признаков там нет.
+    // Знаменатель для "Соответствие ожиданиям"/"Грейд" — не из справочника
+    // численности (Headcount.gs), а из самого справочника "перформанс":
+    // все сотрудники с заполненным полем, независимо от участия в опросе
+    // (см. PerformanceDirectory.countsForFilters).
+    if (sourceYear === "2026") {
+      const expectationsScope = PerformanceDirectory.countsForFilters(
+        PerformanceDirectory.COLUMNS.EXPECTATIONS, filters
+      );
+      const gradeScope = PerformanceDirectory.countsForFilters(
+        PerformanceDirectory.COLUMNS.GRADE, filters
+      );
+
+      dimensions.push(
+        { title: "Соответствие ожиданиям", normalizer: null, noHistory: true, performanceScope: expectationsScope },
+        { title: "Грейд", normalizer: null, noHistory: true, performanceScope: gradeScope },
+        { title: "Роль в отделе", normalizer: null, noHistory: true }
+      );
+    }
+
+    const segments = dimensions.map(dimension => Object.assign(
+      Segments.analyze(
+        rows, headers, questions, dimension.title,
+        {
+          normalizer: dimension.normalizer,
+          previousRows: dimension.noHistory ? null : (hasPrevious ? previousRows : null),
+          previousHeaders: previousHeaders,
+          year: sourceYear,
+          previousYear: previousYear,
+          headcountTotal: headcountScope.count,
+          previousHeadcountTotal: previousHeadcountScope.count,
+          includeHeadcount: includeHeadcount &&
+            (dimension.title === "Отдел" || dimension.title === "Управление" || dimension.title === "Группа команд"),
+          includePreviousHeadcount: !dimension.noHistory && includePreviousHeadcount &&
+            (dimension.title === "Отдел" || dimension.title === "Управление" || dimension.title === "Группа команд"),
+          performanceDimension: !!(dimension.performanceScope && dimension.performanceScope.supported),
+          performanceTotal: dimension.performanceScope && dimension.performanceScope.supported
+            ? dimension.performanceScope.total : null
+        }
+      ),
+      { noHistory: !!dimension.noHistory }
     ));
 
+    // compositionShift сравнивает состав среза год-к-году — бессмысленно
+    // и некорректно для срезов, которых в 2025 не существует.
     const composition = hasPrevious
-      ? dimensions.map(dimension => ({
+      ? dimensions.filter(dimension => !dimension.noHistory).map(dimension => ({
           dimension: dimension.title,
-          shifts: Segments.compositionShift(rows, previousRows, headers, dimension.title, dimension.normalizer)
+          shifts: Segments.compositionShift(
+            rows, previousRows, headers, previousHeaders, dimension.title, dimension.normalizer,
+            sourceYear, previousYear
+          )
             .filter(shift => shift.material)
         })).filter(entry => entry.shifts.length)
       : [];
+
+    // ---------- 9. Связи между срезами перформанса ----------
+
+    // Как и сами срезы "Соответствие ожиданиям"/"Грейд"/"Роль в отделе"
+    // (см. dimensions выше), связи между ними считаются только для 2026 —
+    // признаков нет в данных 2025 (см. CrossSegments.gs).
+    const crossSegments = sourceYear === "2026"
+      ? CrossSegments.analyzeAll(rows, headers, questions)
+      : [];
+
+    // Сводка листа "Связи срезов" (общие показатели компании, сравнение
+    // по грейдам/эффективности, матрица, вопросы с наибольшими различиями,
+    // выводы по группам) — как и crossSegments, только для 2026.
+    const crossSegmentsOverview = sourceYear === "2026"
+      ? CrossSegments.overview(rows, headers, questions, segments)
+      : null;
 
     return {
       meta: {
@@ -144,7 +250,9 @@ const AnalyticsService = {
       gaps: gaps,
       correlationMatrix: matrix,
       segments: segments,
-      composition: composition
+      composition: composition,
+      crossSegments: crossSegments,
+      crossSegmentsOverview: crossSegmentsOverview
     };
 
   },
@@ -160,7 +268,8 @@ const AnalyticsService = {
    *   eNPS     → пункты.
    * Сравнивать их между собой можно только через normalizeLevel.
    */
-  trafficLight_(questions, vectors, previousVectors, rows, previousRows, headers, hasPrevious) {
+  trafficLight_(questions, vectors, previousVectors, rows, previousRows, headers, previousHeaders, hasPrevious,
+    populationSize, previousPopulationSize) {
 
     const enpsQuestion = questions.find(q => q.type === "enps");
     const enpsVector = enpsQuestion ? vectors[enpsQuestion.title] : [];
@@ -184,6 +293,11 @@ const AnalyticsService = {
         type: question.type,
         scaleKey: scaleKey,
         n: stats.n,
+        // Штат текущего фильтра (см. build(): headcountScope) — нужен,
+        // чтобы отличить "n мал, потому что фильтр сузился до маленького,
+        // но ПОЛНОСТЬЮ опрошенного отдела" от настоящей малой выборки
+        // (см. AnalyticsWriter.writeTrafficLight_).
+        populationSize: populationSize || null,
         mean: MathStats.round(stats.mean, 2),
         level: MathStats.round(
           Norms.normalizeLevel(stats.mean, Scoring.minFor(question), Scoring.maxFor(question)), 1
@@ -196,9 +310,10 @@ const AnalyticsService = {
 
         const valid = vector.filter(v => v !== null);
         const ci = MathStats.enpsConfidence(
-          valid.filter(v => v >= 9).length,
-          valid.filter(v => v <= 6).length,
-          valid.length
+          valid.filter(v => Scoring.enpsCategory(v) === "promoters").length,
+          valid.filter(v => Scoring.enpsCategory(v) === "detractors").length,
+          valid.length,
+          populationSize
         );
 
         entry.value = MathStats.round(ci.enps, 1);
@@ -209,9 +324,10 @@ const AnalyticsService = {
 
           const previousValid = previousVector.filter(v => v !== null);
           const previousCi = MathStats.enpsConfidence(
-            previousValid.filter(v => v >= 9).length,
-            previousValid.filter(v => v <= 6).length,
-            previousValid.length
+            previousValid.filter(v => Scoring.enpsCategory(v) === "promoters").length,
+            previousValid.filter(v => Scoring.enpsCategory(v) === "detractors").length,
+            previousValid.length,
+            previousPopulationSize
           );
 
           entry.previous = MathStats.round(previousCi.enps, 1);
@@ -236,7 +352,9 @@ const AnalyticsService = {
           const previousValid = previousVector.filter(v => v !== null);
           const previousBad = previousValid.filter(v => v <= 2).length;
 
-          const test = MathStats.zTestProportions(bad, valid, previousBad, previousValid.length);
+          const test = MathStats.zTestProportions(
+            bad, valid, previousBad, previousValid.length, populationSize, previousPopulationSize
+          );
 
           entry.previous = MathStats.round(previousBad / previousValid.length * 100, 1);
           entry.delta = MathStats.round(entry.value - entry.previous, 1);
@@ -262,7 +380,7 @@ const AnalyticsService = {
 
         if (previousVector) {
 
-          const test = MathStats.welchTest(vector, previousVector);
+          const test = MathStats.welchTest(vector, previousVector, populationSize, previousPopulationSize);
 
           entry.previous = MathStats.round(test.meanB, 2);
           entry.delta = MathStats.round(test.diff, 2);
@@ -287,7 +405,8 @@ const AnalyticsService = {
 
           const previousShare = Scoring.positiveShare(previousVector, 3);
           const test = MathStats.zTestProportions(
-            share.positive, share.valid, previousShare.positive, previousShare.valid
+            share.positive, share.valid, previousShare.positive, previousShare.valid,
+            populationSize, previousPopulationSize
           );
 
           entry.previous = MathStats.round(previousShare.percent, 1);
@@ -317,7 +436,7 @@ const AnalyticsService = {
 
       if (hasPrevious && coverage.coveredPercent !== null) {
 
-        const previousCoverage = Scoring.coverage(previousRows, headers, question);
+        const previousCoverage = Scoring.coverage(previousRows, previousHeaders, question);
 
         if (previousCoverage.coveredPercent !== null) {
           entry.coverageDelta = MathStats.round(
@@ -447,12 +566,22 @@ const AnalyticsService = {
             .map(d => d.label + " " + (d.diff > 0 ? "+" : "") + MathStats.round(d.diff, 1))
             .join(", ");
 
+          // Отклонение от нормы компании считается по ТЕКУЩЕМУ году
+          // (Segments.METRICS), поэтому и severity зависит только от
+          // надежности текущего года — прошлогодняя явка/малая база
+          // сюда не подмешивается (см. Segments.currentReliabilityLimited).
+          // Полный текущий охват не понижает серьезность подтвержденного
+          // отклонения: малое n там значит чувствительность метрики, а
+          // не слабую выборку (см. Segments.coverageCaveat). Та же
+          // функция используется и на листе "Отклонения срезов" —
+          // иначе один и тот же срез может получить противоположные
+          // выводы на разных поверхностях.
+          const caveat = Segments.coverageCaveat(segment, false);
+
           findings.push({
-            severity: segment.fragile ? "warning" : "critical",
+            severity: Segments.currentReliabilityLimited(segment) ? "warning" : "critical",
             title: "Срез с отклонениями: " + segment.name + " (" + dimension.dimension + ", n=" + segment.n + ")",
-            text: bad + ". " + (segment.fragile
-              ? "n<" + Norms.FRAGILE_SEGMENT_SIZE + " — читать как сигнал для точечной проверки, не как факт."
-              : "Размер группы достаточен для вывода.")
+            text: bad + ". " + (caveat.text || "Размер группы достаточен для вывода.")
           });
 
         });

@@ -113,6 +113,27 @@ const Scoring = {
   },
 
   /**
+   * Единственное место, где определены границы категорий eNPS:
+   * критик 0–6, нейтрал 7–8, промоутер 9–10. Используется везде, где
+   * считается eNPS (Statistics.calculateENPS, AnalyticsService,
+   * Segments, Cohort, Drivers) — HR-002, единый источник правды вместо
+   * пяти независимых копий одного и того же порога.
+   */
+  ENPS_THRESHOLDS: { promoter: 9, neutral: 7 },
+
+  /**
+   * Категория одного валидного (не null) значения eNPS.
+   * @param {Number|null} value
+   * @returns {"promoters"|"neutrals"|"detractors"|null}
+   */
+  enpsCategory(value) {
+    if (value === null || value === undefined) return null;
+    if (value >= this.ENPS_THRESHOLDS.promoter) return "promoters";
+    if (value >= this.ENPS_THRESHOLDS.neutral) return "neutrals";
+    return "detractors";
+  },
+
+  /**
    * Числовой вектор ответов на один вопрос.
    *
    * Длина результата РАВНА длине rows: позиция i в векторе всегда
@@ -126,7 +147,7 @@ const Scoring = {
    */
   vector(rows, headers, question) {
 
-    const columnIndex = this.columnIndex_(headers, question.title);
+    const columnIndex = this.columnIndex_(headers, question.dataTitle || question.title);
 
     if (columnIndex === -1) {
       return rows.map(() => null);
@@ -134,7 +155,21 @@ const Scoring = {
 
     const map = this.mapFor(question);
 
-    return rows.map(row => this.score_(row[columnIndex], map));
+    if (map) {
+      return rows.map(row => this.score_(row[columnIndex], map));
+    }
+
+    const min = this.minFor(question);
+    const max = this.maxFor(question);
+
+    return rows.map(row => {
+      const score = this.score_(row[columnIndex], null);
+      if (score !== null && (score < min || score > max)) {
+        console.warn("Scoring: значение " + score + " вне шкалы [" + min + "–" + max + "] для «" + question.title + "», пропущено");
+        return null;
+      }
+      return score;
+    });
 
   },
 
@@ -176,7 +211,7 @@ const Scoring = {
    */
   coverage(rows, headers, question) {
 
-    const columnIndex = this.columnIndex_(headers, question.title);
+    const columnIndex = this.columnIndex_(headers, question.dataTitle || question.title);
 
     if (columnIndex === -1) {
       return { covered: 0, notCovered: 0, empty: rows.length, total: rows.length, coveredPercent: null };
@@ -230,7 +265,7 @@ const Scoring = {
    */
   uncertainMask(rows, headers, question) {
 
-    const columnIndex = this.columnIndex_(headers, question.title);
+    const columnIndex = this.columnIndex_(headers, question.dataTitle || question.title);
 
     if (columnIndex === -1) {
       return rows.map(() => false);
@@ -313,7 +348,7 @@ const Scoring = {
   },
 
   normalize_(value) {
-    return String(value).trim().toLowerCase();
+    return String(value).trim().toLowerCase().replace(/\s+/g, " ");
   }
 
 };

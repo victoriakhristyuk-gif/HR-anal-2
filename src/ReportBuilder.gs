@@ -36,6 +36,27 @@ const ReportBuilder = {
   // Позволяет находить "тот же" отчет независимо от его названия.
   REPORT_KEY_METADATA_KEY: "hranalytics_report_key",
 
+  // Два столбца-отступа, вставленные в начало листа для визуального
+  // центрирования (см. createReport) — контент начинается с колонки 3.
+  CONTENT_COLUMN_OFFSET: 2,
+
+  /**
+   * Единый источник видимых подписей периода.
+   *
+   * currentYear/previousYear задает ReportService. Fallback на source и
+   * 2025 оставлен для совместимости со старыми тестовыми reportData.
+   */
+  getReportPeriods_(reportData) {
+
+    return {
+      currentYear: String(reportData.currentYear || reportData.source),
+      previousYear: reportData.previousYear
+        ? String(reportData.previousYear)
+        : (reportData.comparison ? "2025" : null)
+    };
+
+  },
+
   createReport(reportData, reportName, isCustomName) {
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -94,8 +115,10 @@ const ReportBuilder = {
     // ними (пустые строки внутри самих разделов не затрагиваются).
     this.renderExecutiveSummary_(ctx, reportData);
     this.renderKeyIndicators_(ctx, reportData);
+    this.renderCompanyContext_(ctx, reportData);
     this.renderDetailedAnalyticsBefore_(ctx, reportData);
     this.renderAverageOverviewSection_(ctx, reportData);
+    this.renderCohortRoster_(ctx, reportData);
     this.renderRawData_(ctx, reportData);
 
     Formatter.freezeHeader(sheet, frozenRows, 0);
@@ -120,7 +143,8 @@ const ReportBuilder = {
    * самостоятельно, чтобы не дублировать логику именования и не
    * рисковать расхождением с реальным именем листа (в т.ч. с
    * уникализирующим суффиксом "_2" и т.п., см. getUniqueSheetName, и с
-   * пользовательским названием отчета).
+   * пользовательским названием отчета). При ручном переименовании
+   * листа заголовок обновляется автоматически (см. syncHeader).
    */
   renderHeader_(ctx) {
 
@@ -135,11 +159,30 @@ const ReportBuilder = {
   },
 
   /**
+   * Обновить заголовок листа-отчета, если он разошелся с текущим
+   * названием листа (пользователь переименовал лист вручную).
+   * Ячейка уже отформатирована (mergeAcross, шрифт, цвет) — setValue
+   * меняет только текст, форматирование сохраняется.
+   */
+  syncHeader(sheet) {
+
+    const cell = sheet.getRange(1, 1 + this.CONTENT_COLUMN_OFFSET);
+    const current = String(cell.getValue());
+    const name = sheet.getName();
+
+    if (current !== name) {
+      cell.setValue(name);
+    }
+
+  },
+
+  /**
    * Паспорт выборки: источник, примененные фильтры, размер(ы) выборки.
    */
   renderPassport_(ctx, reportData) {
 
     const sheet = ctx.sheet;
+    const periods = this.getReportPeriods_(reportData);
 
     const activeFilters = reportData.filters
       .filter(filter => this.hasFilterValue(filter))
@@ -149,22 +192,55 @@ const ReportBuilder = {
       ? activeFilters.join("; ")
       : "без фильтров";
 
-    const sourceLineCell = sheet.getRange(ctx.row, 1);
+    const sourceLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     sourceLineCell.setValue(
       "Источник: " + reportData.source + " · Фильтры: " + filtersText
     );
     sourceLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
 
-    const sampleText = reportData.comparison
-      ? "Размер выборки: 2026 — n=" + reportData.employees +
-        "; 2025 — n=" + reportData.comparison.employees2025
-      : "Размер выборки: n=" + reportData.employees;
+    const formatSample = (year, employees) => {
+      const invited = reportData.headcountByYear ? reportData.headcountByYear[year] : null;
+      const rate = reportData.responseRateByYear ? reportData.responseRateByYear[year] : null;
+      return year + " — n=" + employees +
+        (invited !== null && invited !== undefined ? ", приглашены=" + invited : "") +
+        (rate !== null && rate !== undefined
+          ? ", явка=" + rate + "%" + (rate > 100 ? " ⚠ проверьте численность" : "")
+          : "");
+    };
 
-    const sampleLineCell = sheet.getRange(ctx.row, 1);
+    const sampleText = reportData.comparison
+      ? "Размер выборки: " + formatSample(periods.currentYear, reportData.employees) +
+        "; " + formatSample(periods.previousYear, reportData.comparison.employees2025)
+      : "Размер выборки: " + formatSample(periods.currentYear, reportData.employees);
+
+    const sampleLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     sampleLineCell.setValue(sampleText);
     sampleLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
     ctx.row += 1;
+
+    if (reportData.cohortOnly) {
+
+      const cohortLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+      cohortLineCell.setValue("Выборка: сквозная когорта");
+      cohortLineCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
+      ctx.row += 1;
+
+      // Когорту меньше 30 человек не блокируем — статистика по ней
+      // (в т.ч. парные тесты Cohort.changes) все равно посчитана и
+      // показана, но выводы по ней ненадежны, и это должно быть видно
+      // сразу в паспорте, а не только в тексте Executive Summary.
+      if (reportData.cohortInfo && reportData.cohortInfo.size < 30) {
+        const warningRange = Formatter.wrapTextRow(sheet, ctx.row, 6);
+        warningRange.setValue(
+          "⚠ Когорта меньше 30 человек (n=" + reportData.cohortInfo.size +
+          ") — статистические выводы по ней ненадежны."
+        );
+        Formatter.formatWarningBanner(warningRange);
+        ctx.row += 1;
+      }
+
+    }
 
     ctx.row += 1; // пустая строка-разделитель
 
@@ -196,9 +272,9 @@ const ReportBuilder = {
     const enpsShift = this.interpretEnpsShift_(reportData);
 
     if (enpsShift) {
-      const enpsShiftCell = sheet.getRange(ctx.row, 1);
+      const enpsShiftCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       enpsShiftCell.setValue(enpsShift);
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      Formatter.applyZebraStripe(enpsShiftCell, lineIndex++);
       ctx.row += 1;
     }
 
@@ -208,22 +284,60 @@ const ReportBuilder = {
     const themes = this.detectCommentThemes_(comments);
 
     if (themes.length > 0) {
-      const themesLineCell = sheet.getRange(ctx.row, 1);
+      const themesLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
       themesLineCell.setValue("Темы в комментариях: " + this.formatThemesList_(themes.slice(0, 3)));
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+      Formatter.applyZebraStripe(themesLineCell, lineIndex++);
       ctx.row += 1;
     }
 
     // 4. Драматичные изменения по всем блокам анкеты (Модуль 2) —
     // пропускается, если список пуст (нет пары за прошлый год, либо
-    // изменений выше порога не нашлось).
+    // изменений выше порога не нашлось). Отбор по-прежнему делается по
+    // порогу "заметности" (визуальная эвристика, не тест), но теперь
+    // каждая отобранная запись несет свой честный significant
+    // (zTestProportions/welchTest, см. buildDramaticChangesInput_/
+    // Comparison.gs) — эвристика решает, что ПОКАЗАТЬ, тест решает,
+    // МОЖНО ЛИ ДОВЕРЯТЬ конкретной строке (см. formatDramaticChangesList_).
     const dramaticChangesInput = this.buildDramaticChangesInput_(reportData);
-    const dramaticChanges = this.selectDramaticChanges_(dramaticChangesInput);
+    const dramaticChanges = this.selectDramaticChanges_(dramaticChangesInput).slice(0, 3);
+    const hasUnconfirmedDramaticChange = dramaticChanges.some(change => change.significant === false);
 
     if (dramaticChanges.length > 0) {
-      const dramaticChangesCell = sheet.getRange(ctx.row, 1);
-      dramaticChangesCell.setValue("Заметные изменения: " + this.formatDramaticChangesList_(dramaticChanges.slice(0, 3)));
-      Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+
+      // Дисклеймер — сразу под заголовком блока, ДО списка (см. задачу):
+      // читатель должен узнать, что часть строк ниже помечена звездочкой
+      // как неподтвержденная, прежде чем прочитает сам список, а не после.
+      if (hasUnconfirmedDramaticChange) {
+        const legendCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+        legendCell.setValue(
+          "Заметные изменения (порог заметности, не тест на значимость; * — изменение " +
+          "статистически не подтверждено, возможен шум выборки):"
+        );
+        legendCell.setFontStyle("italic").setFontColor(Formatter.MUTED_TEXT_COLOR);
+        Formatter.applyZebraStripe(legendCell, lineIndex++);
+        ctx.row += 1;
+      }
+
+      const dramaticChangesCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+      dramaticChangesCell.setValue(
+        (hasUnconfirmedDramaticChange ? "" : "Заметные изменения: ") +
+        this.formatDramaticChangesList_(dramaticChanges)
+      );
+      Formatter.applyZebraStripe(dramaticChangesCell, lineIndex++);
+      ctx.row += 1;
+    }
+
+    // Оговорка про порог "заметности" для eNPS-сдвига (interpretEnpsShift_,
+    // тот же визуальный порог DRAMATIC_CHANGE_THRESHOLD_PERCENT_, но без
+    // собственного z-теста на уровне текста) — независима от блока выше.
+    if (enpsShift) {
+      const disclaimerCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+      disclaimerCell.setValue(
+        "Сдвиг категорий eNPS выше отобран по порогу заметности (визуальная эвристика), а не по " +
+        "статистической проверке значимости — на небольшой выборке такая дельта может быть случайным колебанием."
+      );
+      disclaimerCell.setFontStyle("italic").setFontColor(Formatter.MUTED_TEXT_COLOR);
+      Formatter.applyZebraStripe(disclaimerCell, lineIndex++);
       ctx.row += 1;
     }
 
@@ -231,20 +345,20 @@ const ReportBuilder = {
     const metrics = this.buildRatingMetricsForSummary_(reportData);
     const extremes = this.selectTopBottomRatings_(metrics, 3);
 
-    const highLineCell = sheet.getRange(ctx.row, 1);
+    const highLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     Formatter.setColoredPrefixText(
       highLineCell, "Самые высокие показатели: ",
       this.formatRatingList_(extremes.top), Formatter.DELTA_GOOD_COLOR
     );
-    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+    Formatter.applyZebraStripe(highLineCell, lineIndex++);
     ctx.row += 1;
 
-    const lowLineCell = sheet.getRange(ctx.row, 1);
+    const lowLineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
     Formatter.setColoredPrefixText(
       lowLineCell, "Самые низкие показатели: ",
       this.formatRatingList_(extremes.bottom), Formatter.DELTA_BAD_COLOR
     );
-    Formatter.applyZebraStripe(sheet.getRange(ctx.row, 1, 1, 6), lineIndex++);
+    Formatter.applyZebraStripe(lowLineCell, lineIndex++);
     ctx.row += 1;
 
   },
@@ -266,6 +380,12 @@ const ReportBuilder = {
    * "questionTitle Δ" для rating-изменений, "questionTitle — answerLabel Δ"
    * для percent-изменений из selectDramaticChanges_ — тот же формат
    * дельты (стрелка+знак), что и у остальных строк Executive Summary.
+   *
+   * change.significant === false (zTestProportions/welchTest, см.
+   * buildDramaticChangesInput_) добавляет "*" — эта конкретная строка
+   * прошла визуальный порог "заметности", но не тест на значимость,
+   * т.е. с достаточной вероятностью это шум выборки, а не тренд
+   * (см. HR-002 и легенду в renderExecutiveSummary_).
    */
   formatDramaticChangesList_(changes) {
 
@@ -277,8 +397,9 @@ const ReportBuilder = {
           : change.questionTitle + " — " + change.answerLabel;
 
         const suffix = change.kind === "rating" ? "" : " п.п.";
+        const marker = change.significant === false ? "*" : "";
 
-        return label + " " + this.formatSignedDelta_(change.delta, suffix);
+        return label + " " + this.formatSignedDelta_(change.delta, suffix) + marker;
 
       })
       .join("   ");
@@ -299,6 +420,7 @@ const ReportBuilder = {
   buildEnpsSummaryLine_(reportData) {
 
     const enps = reportData.enps.enps;
+    const previousYear = this.getReportPeriods_(reportData).previousYear;
 
     if (!reportData.comparison) {
       return "eNPS: " + enps;
@@ -307,11 +429,31 @@ const ReportBuilder = {
     const comparisonEnps = reportData.comparison.enps;
 
     if (comparisonEnps.delta === null || comparisonEnps.value2025 === null) {
-      return "eNPS: " + enps + " (нет данных 2025 для сравнения)";
+      return "eNPS: " + enps + " (нет данных " + previousYear + " для сравнения)";
     }
 
     return "eNPS: " + enps + " (" + this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
-      " к 2025: " + comparisonEnps.value2025 + ")";
+      " к " + previousYear + ": " + comparisonEnps.value2025 + ")" +
+      this.formatEnpsSignificanceSuffix_(comparisonEnps);
+
+  },
+
+  /**
+   * " — в пределах погрешности (ДИ ±N), тренда нет" после дельты eNPS,
+   * когда доверительные интервалы двух лет перекрываются
+   * (comparisonEnps.significant === false). Пусто, если значимо
+   * (significant === true) или непроверяемо (значение по одному из
+   * годов недостаточно для расчета ДИ, significant === null) — в
+   * последнем случае дельта уже сама по себе не подставляется нулем
+   * (см. compareENPS), молчаливой ложной уверенности здесь нет.
+   */
+  formatEnpsSignificanceSuffix_(comparisonEnps) {
+
+    if (comparisonEnps.significant !== false) return "";
+
+    const margin = Math.max(comparisonEnps.margin2026 || 0, comparisonEnps.margin2025 || 0);
+
+    return " — в пределах погрешности (ДИ ±" + margin + " п.п.), тренда нет";
 
   },
 
@@ -340,8 +482,8 @@ const ReportBuilder = {
   renderEnpsLine_(ctx, reportData, lineIndex) {
 
     const sheet = ctx.sheet;
-    const rowRange = sheet.getRange(ctx.row, 1, 1, 6);
-    const cell = sheet.getRange(ctx.row, 1);
+    const rowRange = Formatter.wrapTextRow(sheet, ctx.row, 6);
+    const cell = rowRange;
 
     const isWholeCompany = reportData.filters.filter(filter => this.hasFilterValue(filter)).length === 0;
 
@@ -479,12 +621,15 @@ const ReportBuilder = {
   buildSliceEnpsYoyText_(reportData) {
 
     const comparisonEnps = reportData.comparison.enps;
+    const previousYear = this.getReportPeriods_(reportData).previousYear;
 
     if (comparisonEnps.delta === null || comparisonEnps.value2025 === null) {
-      return "нет данных 2025 для сравнения по срезу";
+      return "нет данных " + previousYear + " для сравнения по срезу";
     }
 
-    return this.formatSignedDelta_(comparisonEnps.delta, " п.п.") + " к 2025 (" + comparisonEnps.value2025 + ")";
+    return this.formatSignedDelta_(comparisonEnps.delta, " п.п.") +
+      " к " + previousYear + " (" + comparisonEnps.value2025 + ")" +
+      this.formatEnpsSignificanceSuffix_(comparisonEnps);
 
   },
 
@@ -560,6 +705,7 @@ const ReportBuilder = {
     const sheet = ctx.sheet;
     const enps = reportData.enps;
     const comparisonEnps = reportData.comparison ? reportData.comparison.enps : null;
+    const periods = this.getReportPeriods_(reportData);
     const categories = ["promoters", "neutrals", "detractors"];
 
     const labelRange = sheet.getRange(ctx.row, 1);
@@ -577,17 +723,29 @@ const ReportBuilder = {
       deltaCell.setValue(comparisonEnps.delta);
       deltaCell.setFontSize(11).setFontWeight("bold").setHorizontalAlignment("center");
       Formatter.applyCompactDeltaNumberFormat(deltaCell);
-      Formatter.setDeltaFontColor(deltaCell, comparisonEnps.delta, "up");
+      // HR-002: значимость динамики (перекрытие ДИ, см. compareENPS) —
+      // не подтвержденная разница красится нейтрально-серым (та же
+      // логика, что и Δ=0), а не зеленым/красным как настоящий тренд.
+      Formatter.setDeltaFontColor(deltaCell, comparisonEnps.delta,
+        comparisonEnps.significant === false ? "neutral" : "up");
     }
 
     if (comparisonEnps && comparisonEnps.value2025 !== null && comparisonEnps.value2025 !== undefined) {
       const value2025Cell = sheet.getRange(ctx.row, 3);
-      value2025Cell.setValue("(2025: " + this.formatSignedInt_(comparisonEnps.value2025) + ")");
+      value2025Cell.setValue("(" + periods.previousYear + ": " + this.formatSignedInt_(comparisonEnps.value2025) + ")");
       Formatter.formatMutedSmall(value2025Cell);
       value2025Cell.setHorizontalAlignment("center");
     }
 
     ctx.row += 1;
+
+    if (comparisonEnps && comparisonEnps.significant === false) {
+      const noteRange = sheet.getRange(ctx.row, 1, 1, 3);
+      noteRange.setValue("В пределах погрешности (ДИ ±" +
+        Math.max(comparisonEnps.margin2026 || 0, comparisonEnps.margin2025 || 0) + " п.п.) — тренда нет");
+      Formatter.formatMutedSmall(noteRange);
+      ctx.row += 1;
+    }
 
     const comparisonByCategory = {};
     if (comparisonEnps) {
@@ -601,7 +759,7 @@ const ReportBuilder = {
     }));
 
     this.renderCompactAnswerList_(
-      ctx, items, false,
+      ctx, items, false, periods.currentYear, periods.previousYear,
       category => this.ENPS_CATEGORY_META_[category].emoji + " " + this.ENPS_CATEGORY_META_[category].label,
       null,
       category => this.ENPS_CATEGORY_META_[category].barColor
@@ -622,11 +780,100 @@ const ReportBuilder = {
         })
         .join(" • ");
 
-      sheet.getRange(ctx.row, 1).setValue("2025: " + summary);
+      sheet.getRange(ctx.row, 1).setValue(periods.previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(ctx.row, 1));
       ctx.row += 1;
 
     }
+
+  },
+
+  /**
+   * Company-wide контекст из расширенного контура (см. src/SegmentContext.gs).
+   * Рисуется, только если фильтр отчета однозначно совпал с бакетом,
+   * который уже посчитал AnalyticsService.build (отдел/стаж/город/...).
+   * Секция ничего не пересчитывает — только читает готовые deviations/
+   * confirmed/yearDelta того же сегмента, что видит расширенный контур,
+   * поэтому формулировки намеренно повторяют AnalyticsService.findings
+   * (пп. 6), чтобы не разойтись в терминологии между отчетом и
+   * листами расширенной аналитики.
+   */
+  renderCompanyContext_(ctx, reportData) {
+
+    const segments = reportData.segmentContext || [];
+
+    if (segments.length === 0) return;
+
+    const sheet = ctx.sheet;
+
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue("Контекст по компании (расширенный контур)");
+    Formatter.formatSectionTitle(sheet, titleRange);
+    ctx.row += 1;
+
+    segments.forEach(segment => {
+
+      const badDeviations = segment.deviations.filter(d => d.bad);
+
+      const headline = segment.dimension + ": «" + segment.name + "» (n=" + segment.n + ")" +
+        (segment.confirmed ? " — подтвержденное отклонение" : "");
+
+      const headlineCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+      headlineCell.setValue(headline);
+      headlineCell.setFontWeight("bold");
+      ctx.row += 1;
+
+      if (badDeviations.length > 0) {
+
+        const text = badDeviations
+          .map(d => d.label + " " + (d.diff > 0 ? "+" : "") + MathStats.round(d.diff, 1))
+          .join(", ");
+
+        Formatter.wrapTextRow(sheet, ctx.row, 6).setValue(text + " (относительно нормы по компании)");
+        ctx.row += 1;
+
+      }
+
+      if (segment.yearDelta && segment.yearDelta.meaningful) {
+
+        const delta = segment.yearDelta.delta;
+
+        Formatter.wrapTextRow(sheet, ctx.row, 6).setValue(
+          "eNPS год-к-году: " + segment.yearDelta.previous + " → " + segment.metrics.enps +
+          " (" + (delta > 0 ? "+" : "") + delta + ", значимое изменение)"
+        );
+        ctx.row += 1;
+
+        // Ограничение прошлого года относится только к сравнению
+        // годов — показывается рядом с самой динамикой, а не смешано
+        // с оговоркой текущего результата ниже (см.
+        // Segments.yearComparisonLimited).
+        const previousCaveat = segment.previousN > 0 ? Segments.coverageCaveat(segment, true) : null;
+
+        if (previousCaveat && previousCaveat.limitsReliability) {
+          const comparisonCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+          comparisonCell.setValue("Ограничение относится только к сравнению с прошлым годом: " + previousCaveat.text);
+          comparisonCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
+          ctx.row += 1;
+        }
+
+      }
+
+      // Оговорка текущего результата — оценивается только по текущему
+      // году (Segments.currentReliabilityLimited), тот же источник
+      // текста, что у AnalyticsService.findings/AnalyticsWriter.
+      const caveat = Segments.coverageCaveat(segment, false);
+
+      if (caveat.text) {
+        const caveatCell = Formatter.wrapTextRow(sheet, ctx.row, 6);
+        caveatCell.setValue(caveat.text);
+        caveatCell.setFontColor(Formatter.MUTED_TEXT_COLOR);
+        ctx.row += 1;
+      }
+
+      ctx.row += 1;
+
+    });
 
   },
 
@@ -644,6 +891,7 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
     const hasComparison = !!reportData.comparison;
+    const previousYear = this.getReportPeriods_(reportData).previousYear;
     const rows = this.buildAverageOverviewRows_(reportData);
     const coverageByQuestion = this.buildAverageCoverageInfo_(reportData);
 
@@ -669,7 +917,9 @@ const ReportBuilder = {
         return;
       }
 
-      this.renderAverageScoreGroup_(ctx, groupName, group.icon, groupRows, hasComparison, coverageByQuestion);
+      this.renderAverageScoreGroup_(
+        ctx, groupName, group.icon, groupRows, hasComparison, coverageByQuestion, previousYear
+      );
       ctx.row += 1; // пустая строка-разделитель между разделами
 
     });
@@ -719,7 +969,7 @@ const ReportBuilder = {
    * не получает вторую строку (см. buildAverageCoverageInfo_) — сюда
    * попадают только rating5-вопросы из AVERAGE_SCORE_GROUPS_, у которых
    * в каталоге (Questions.gs) реально есть ответ "не пользовался"
-   * ("Задачи 2"/"ЗП" его не имеют и поэтому не перечислены).
+   * ("Удовлетворенность рабочими задачами"/"ЗП" его не имеют и поэтому не перечислены).
    *
    * Значение — объект (не голая строка), т.к. это по сути мини-конфигурация
    * на вопрос, а не просто словарь подписей: например, buildAverageCoverageInfo_
@@ -942,9 +1192,18 @@ const ReportBuilder = {
       const percent2026 = total2026 > 0 ? Math.round(item.count2026 / total2026 * 100) : null;
       const percent2025 = total2025 > 0 ? Math.round(item.count2025 / total2025 * 100) : null;
 
+      // zTestProportions (HR-002) — знаменатель здесь свой (без
+      // неответа), поэтому significant из Comparison.compareDistributionItems
+      // (посчитанный на исходном знаменателе) сюда не годится и
+      // пересчитывается заново на тех же total2026/total2025.
+      const significant = (percent2026 !== null && percent2025 !== null)
+        ? MathStats.zTestProportions(item.count2026, total2026, item.count2025, total2025).significant
+        : null;
+
       return {
         answer: item.answer,
-        delta: (percent2026 !== null && percent2025 !== null) ? percent2026 - percent2025 : null
+        delta: (percent2026 !== null && percent2025 !== null) ? percent2026 - percent2025 : null,
+        significant: significant
       };
 
     });
@@ -1032,7 +1291,8 @@ const ReportBuilder = {
         answerLabel: null,
         delta: item.delta,
         kind: "rating",
-        direction: item.delta > 0 ? "up" : "down"
+        direction: item.delta > 0 ? "up" : "down",
+        significant: item.significant
       });
 
     });
@@ -1078,12 +1338,24 @@ const ReportBuilder = {
           return;
         }
 
+        // zTestProportions (HR-002) — знаменатель тот же, что у
+        // percent2026/percent2025 бакета: все ответившие на вопрос
+        // (Да/Нет-шкала без отдельного варианта "неответ").
+        const bucketTotal2026 = entry.items.reduce((sum, item) => sum + item.count2026, 0);
+        const bucketTotal2025 = entry.items.reduce((sum, item) => sum + (item.count2025 || 0), 0);
+        const bucketSignificant = (bucketTotal2026 > 0 && bucketTotal2025 > 0)
+          ? MathStats.zTestProportions(
+              growingBucket.count2026, bucketTotal2026, growingBucket.count2025, bucketTotal2025
+            ).significant
+          : null;
+
         changes.push({
           questionTitle: entry.question.title,
           answerLabel: this.stripBucketLabelEmoji_(growingBucket.label),
           delta: growingBucket.delta,
           kind: "percent",
-          direction: "up"
+          direction: "up",
+          significant: bucketSignificant
         });
 
         return;
@@ -1101,7 +1373,8 @@ const ReportBuilder = {
           answerLabel: item.answer,
           delta: item.delta,
           kind: "percent",
-          direction: item.delta > 0 ? "up" : "down"
+          direction: item.delta > 0 ? "up" : "down",
+          significant: item.significant
         });
 
       });
@@ -1119,7 +1392,8 @@ const ReportBuilder = {
         answerLabel: this.ENPS_CATEGORY_LABELS_[category.category],
         delta: category.delta,
         kind: "percent",
-        direction: category.delta > 0 ? "up" : "down"
+        direction: category.delta > 0 ? "up" : "down",
+        significant: category.significant
       });
 
     });
@@ -1213,6 +1487,24 @@ const ReportBuilder = {
     }
 
     const threshold = this.DRAMATIC_CHANGE_THRESHOLD_PERCENT_;
+
+    // Методика (задача 6): утверждение об ИЗМЕНЕНИИ ("вырос"/"снизился")
+    // делается только там, где скорректированные ДИ обоих годов НЕ
+    // пересекаются (enps.significant, см. Comparison.compareENPS →
+    // MathStats.enpsChangeIsReal). Если пересекаются — два числа рядом,
+    // без утверждения о динамике, годы называются числом, не "прошлый
+    // год". |enps.delta| >= threshold сам по себе это не гарантирует:
+    // разница может быть крупной по модулю и всё равно внутри шума при
+    // широком ДИ (типично для малых/частично охваченных групп).
+    // comparison (см. ReportService.buildReport) существует только когда
+    // source === "2026" — предыдущий год в этом сравнении всегда 2025.
+    const previousYearLabel = "2025";
+
+    if (enps.significant === false) {
+      return "eNPS " + enps.value2026 + ", в " + previousYearLabel + " — " + enps.value2025 +
+        " (разница " + this.formatSignedDelta_(enps.delta, " п.п.") +
+        " не выходит за пределы доверительного интервала — считать динамикой нельзя).";
+    }
 
     // Правило 2: критики стабильны, изменение — переток между
     // промоутерами и нейтралами (произведение дельт < 0 значит разные
@@ -1323,7 +1615,7 @@ const ReportBuilder = {
    * оценка, Δ справа — тот же стиль, что и у "⭐ Средняя оценка" внутри
    * вопроса и у KPI-карточек риск-блока/Да-Нет).
    */
-  renderAverageScoreGroup_(ctx, groupName, icon, groupRows, hasComparison, coverageByQuestion) {
+  renderAverageScoreGroup_(ctx, groupName, icon, groupRows, hasComparison, coverageByQuestion, previousYear) {
 
     const sheet = ctx.sheet;
 
@@ -1333,7 +1625,7 @@ const ReportBuilder = {
     ctx.row += 1;
 
     if (groupRows.length > 1) {
-      this.renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison);
+      this.renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison, previousYear);
     }
 
     let zebraIndex = 0;
@@ -1356,7 +1648,7 @@ const ReportBuilder = {
    * "Средняя оценка раздела" (col1) | значение (+"(2025: ...)" той же
    * ячейкой, см. setKpiValueWithPreviousYear_) (col2) | Δ (col3).
    */
-  renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison) {
+  renderAverageScoreGroupKpi_(ctx, groupRows, hasComparison, previousYear) {
 
     const sheet = ctx.sheet;
     const average = values => +(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2);
@@ -1375,7 +1667,7 @@ const ReportBuilder = {
 
       // "4,52 (2025: 4,49)" одной ячейкой — воспринимается как единый
       // KPI, а не три независимых элемента; Δ — соседней ячейкой справа.
-      this.setKpiValueWithPreviousYear_(valueCell, value2026, value2025);
+      this.setKpiValueWithPreviousYear_(valueCell, value2026, value2025, previousYear);
 
       const deltaCell = sheet.getRange(ctx.row, 3);
       deltaCell.setValue(delta);
@@ -1525,10 +1817,10 @@ const ReportBuilder = {
    * строка обзора, а не отдельный акцентный показатель. Δ остается
    * соседней ячейкой, здесь не участвует.
    */
-  setKpiValueWithPreviousYear_(cell, value2026, value2025) {
+  setKpiValueWithPreviousYear_(cell, value2026, value2025, previousYear) {
 
     const currentText = this.formatRatingValue_(value2026);
-    const previousText = " (2025: " + this.formatRatingValue_(value2025) + ")";
+    const previousText = " (" + previousYear + ": " + this.formatRatingValue_(value2025) + ")";
     const fullText = currentText + previousText;
 
     const richText = SpreadsheetApp.newRichTextValue()
@@ -1633,6 +1925,8 @@ const ReportBuilder = {
    */
   buildDetailLookups_(reportData) {
 
+    const periods = this.getReportPeriods_(reportData);
+
     const byQuestionTitle = list => {
       const map = {};
       list.forEach(entry => { map[entry.question.title] = entry; });
@@ -1653,7 +1947,14 @@ const ReportBuilder = {
       topAnswers: byQuestionTitle(reportData.topAnswers),
       comparisonTopAnswers: reportData.comparison ? byQuestionTitle(reportData.comparison.topAnswers) : {},
       averages: averages,
-      comparisonAverages: comparisonAverages
+      comparisonAverages: comparisonAverages,
+      currentYear: periods.currentYear,
+      previousYear: periods.previousYear,
+      // Сырые строки/заголовки текущего года — нужны только
+      // sectionScore_ (кодирование Scoring.vector по вопросу), больше
+      // никто из renderSection_/renderQuestionBlock_ их не читает.
+      rows: reportData.filteredRows,
+      headers: reportData.headers
     };
 
   },
@@ -1671,7 +1972,8 @@ const ReportBuilder = {
 
     const sheet = ctx.sheet;
     const sectionStartRow = ctx.row;
-    const title = section.indent ? "    " + section.name : section.name;
+    const baseTitle = section.indent ? "    " + section.name : section.name;
+    const title = baseTitle + this.sectionScoreSuffix_(this.sectionScore_(section, lookups));
 
     const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
     titleRange.setValue(title);
@@ -1687,6 +1989,84 @@ const ReportBuilder = {
     if (sectionContentRows > 0) {
       Formatter.groupRows(sheet, sectionStartRow + 1, sectionContentRows, true);
     }
+
+  },
+
+  // Типы вопросов, для которых определено направление "лучше/хуже" и,
+  // соответственно, можно посчитать normalizeLevel (см. sectionScore_).
+  // "single"/"text" сюда намеренно не входят — это информационные
+  // вопросы о составе выборки (Город/Отдел/Стаж/...) или открытые
+  // ответы (Топ 5), у них нет единой шкалы и правильного направления.
+  SECTION_SCORE_SCORABLE_TYPES_: ["rating5", "scale4", "scale5"],
+
+  /**
+   * "Общая оценка раздела" — среднее нормализованных [0, 100] оценок
+   * всех вопросов раздела, для которых определено направление
+   * "лучше/хуже" (SECTION_SCORE_SCORABLE_TYPES_). Каждый вопрос имеет
+   * одинаковый вес независимо от числа вариантов ответа и числа
+   * заполненных ответов: сначала считается среднее ПО КАЖДОМУ вопросу
+   * и переводится в 0–100 (Norms.normalizeLevel), и только потом эти
+   * уже нормализованные средние усредняются между собой.
+   *
+   * Инверсия обратных вопросов ("Выгорание"/"Смена работы") не
+   * делается здесь отдельно — она уже встроена в кодирование
+   * Scoring.vector (Scoring.MAPS.burnout/retention: "больше = лучше"
+   * для всех вопросов проекта без исключений, см. Scoring.gs), поэтому
+   * normalizeLevel(mean, min, max) сразу дает правильно направленную
+   * оценку.
+   *
+   * @returns {Number|null} null, если в разделе нет ни одного вопроса
+   *   с определенным направлением, либо ни по одному нет ответов.
+   */
+  sectionScore_(section, lookups) {
+
+    const rows = lookups.rows;
+    const headers = lookups.headers;
+
+    const normalizedScores = section.questions
+      .filter(question => this.SECTION_SCORE_SCORABLE_TYPES_.indexOf(question.type) !== -1)
+      .map(question => {
+
+        const values = Scoring.vector(rows, headers, question).filter(value => value !== null);
+
+        if (values.length === 0) return null;
+
+        const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+
+        return Norms.normalizeLevel(mean, Scoring.minFor(question), Scoring.maxFor(question));
+
+      })
+      .filter(value => value !== null);
+
+    if (normalizedScores.length === 0) return null;
+
+    return normalizedScores.reduce((sum, value) => sum + value, 0) / normalizedScores.length;
+
+  },
+
+  /**
+   * "  ·  Общая оценка раздела: 84% 🟢" — дописывается прямо в текст
+   * заголовка раздела (та же строка, тот же merge через
+   * Formatter.formatSectionTitle), а не отдельной строкой ниже.
+   * Заголовок — единственная строка секции, которая остается видимой
+   * при свернутой группе (Formatter.groupRows сворачивает строки
+   * ПОСЛЕ заголовка, см. renderSection_) — только так оценку раздела
+   * видно, не разворачивая группу. Цвет/эмодзи не расставить внутри
+   * одной строки текста (белый текст на цветной плашке заголовка
+   * не подсветить фоном отдельно от остального текста), поэтому статус
+   * передается только эмодзи-светофором (Norms.STATUS_EMOJI), без
+   * заливки ячейки. "" (то есть title без изменений), если score ===
+   * null — в разделе нет ни одного вопроса с определенным направлением
+   * "лучше/хуже" (см. sectionScore_).
+   */
+  sectionScoreSuffix_(score) {
+
+    if (score === null) return "";
+
+    const percent = Math.round(score);
+    const status = Norms.status(score, "sectionScore");
+
+    return "   ·   Общая оценка раздела: " + percent + "% " + Norms.STATUS_EMOJI[status];
 
   },
 
@@ -1720,6 +2100,8 @@ const ReportBuilder = {
   renderQuestionBlock_(ctx, question, section, lookups, hasComparison) {
 
     const sheet = ctx.sheet;
+    const currentYear = lookups.currentYear;
+    const previousYear = lookups.previousYear;
 
     const isTopAnswers = question.display === "Топ 5";
 
@@ -1748,6 +2130,17 @@ const ReportBuilder = {
         .sort((a, b) => b.count2026 - a.count2026);
     }
 
+    // Теги справочника "перформанс" ("Соответствие ожиданиям"/"Грейд",
+    // performanceOnly:true — см. Questions.gs) показываются в "Составе
+    // выборки", только если в этой конкретной выборке отчета они вообще
+    // есть: источник "Ответы 2025" их не содержит вовсе, а у части
+    // сотрудников 2026 справочник может быть не заполнен/не сопоставлен.
+    // Вопрос без единого тега пропускается целиком — ни подписи, ни
+    // пустой таблицы, а не "вопрос без данных".
+    if (question.performanceOnly && items.length === 0) {
+      return;
+    }
+
     // "Выгорание"/"Смена работы" (RISK_QUESTIONS_) и вопросы Да/Нет с
     // настроенной сводкой (YES_NO_SUMMARIES_) рендерятся одним и тем же
     // общим блоком "агрегированный KPI + детализация" — см.
@@ -1758,7 +2151,9 @@ const ReportBuilder = {
     const blockConfig = this.getRiskBlockConfig_(question) || this.getYesNoBlockConfig_(question);
 
     if (blockConfig) {
-      this.renderAggregatedAnswerBlock_(ctx, blockConfig, items, hasComparison);
+      this.renderAggregatedAnswerBlock_(
+        ctx, blockConfig, items, hasComparison, currentYear, previousYear
+      );
       ctx.row += 1; // разделитель между вопросами
       return;
     }
@@ -1789,13 +2184,15 @@ const ReportBuilder = {
       const displayItems = question.title === "Город" ? this.collapseSmallCities_(items) : items;
       this.renderReferenceAnswerList_(ctx, displayItems, showDelta);
     } else if (Questions.isYesNoScale(question)) {
-      this.renderCompactAnswerList_(ctx, items, hasComparison, answer => this.capitalize_(answer));
+      this.renderCompactAnswerList_(
+        ctx, items, hasComparison, currentYear, previousYear, answer => this.capitalize_(answer)
+      );
     } else if (question.type === "rating5") {
       // В строке "2025:" эмодзи-легенда не дублируется (formatSummaryLabel
       // отдельно от formatLabel) — иначе в мелком справочном тексте она
       // конкурирует за внимание с эмодзи основного (2026) списка.
       this.renderCompactAnswerList_(
-        ctx, items, hasComparison,
+        ctx, items, hasComparison, currentYear, previousYear,
         answer => this.formatRatingAnswerLabel_(answer),
         answer => answer
       );
@@ -1803,9 +2200,9 @@ const ReportBuilder = {
       // Все вопросы MULTIPLE (display "Топ 5") автоматически получают
       // рейтинговое отображение — специализированного рендера под
       // конкретный вопрос нет, см. renderRankedAnswerList_.
-      this.renderRankedAnswerList_(ctx, items, hasComparison);
+      this.renderRankedAnswerList_(ctx, items, hasComparison, previousYear);
     } else {
-      this.renderAnswerTable_(ctx, items, hasComparison, hasPercent);
+      this.renderAnswerTable_(ctx, items, hasComparison, hasPercent, currentYear, previousYear);
     }
 
     ctx.row += 1; // разделитель между вопросами
@@ -1882,7 +2279,7 @@ const ReportBuilder = {
    */
   YES_NO_SUMMARIES_: {
 
-    "График": { positive: "Устраивает", negative: "Не устраивает" },
+    "Work-life balance": { positive: "Устраивает", negative: "Не устраивает" },
     "Задачи": { positive: "Устраивают", negative: "Не устраивают" },
     "Ожидания": { positive: "Ожидания понятны", negative: "Ожидания непонятны" },
     "Проф мнение": { positive: "Мнение учитывается", negative: "Мнение не учитывается" },
@@ -1945,7 +2342,7 @@ const ReportBuilder = {
    * агрегированными значениями категорий (не по отдельным вариантам
    * ответа).
    */
-  renderAggregatedAnswerBlock_(ctx, blockConfig, items, hasComparison) {
+  renderAggregatedAnswerBlock_(ctx, blockConfig, items, hasComparison, currentYear, previousYear) {
 
     const sheet = ctx.sheet;
 
@@ -1977,7 +2374,9 @@ const ReportBuilder = {
     // Эмодзи-легенда здесь тоже не используется (в отличие от KPI-строк
     // и строки "2025:") — только эмодзи-легенда KPI-карточки остается
     // визуальным акцентом, детализация оформлена нейтрально.
-    this.renderCompactAnswerList_(ctx, items, false, answer => this.capitalize_(answer));
+    this.renderCompactAnswerList_(
+      ctx, items, false, currentYear, previousYear, answer => this.capitalize_(answer)
+    );
 
     if (hasComparison) {
 
@@ -1990,7 +2389,7 @@ const ReportBuilder = {
         })
         .join(" • ");
 
-      sheet.getRange(ctx.row, 1).setValue("2025: " + summary);
+      sheet.getRange(ctx.row, 1).setValue(previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(ctx.row, 1));
       ctx.row += 1;
 
@@ -2019,7 +2418,7 @@ const ReportBuilder = {
       return (total !== null && value !== null && value !== undefined) ? total + value : null;
     }, 0);
 
-    return buckets.map(bucket => {
+    const result = buckets.map(bucket => {
 
       const matched = bucket.answers
         .map(answer => byAnswer[answer.trim().toLowerCase()])
@@ -2036,6 +2435,47 @@ const ReportBuilder = {
       };
 
     });
+
+    // HR-002: знаменатель риск-метрик. Как посчитан items[].percent —
+    // это доля от ВСЕХ ответивших на вопрос, включая "неответ"
+    // ("затрудняюсь ответить" и т.п. — bucket с direction "neutral",
+    // например "⚪ Затруднились" у "Выгорание"). Но задокументированное
+    // решение проекта (Norms.RISK_DENOMINATOR = "answered", см. Norms.gs)
+    // — риск-метрика должна отвечать на вопрос "какая доля тех, кто
+    // ВЫБРАЛ точку шкалы", а не всех опрошенных, и именно так ее уже
+    // считает "Расширенная аналитика" (AnalyticsService/Scoring). Без
+    // этого пересчета один и тот же показатель "Выгорание" давал разные
+    // проценты в основном отчете и в расширенной аналитике (16,5% vs
+    // 17,8% на данных 2026 года) — одна и та же карточка молчаливо врала
+    // при сверке двух листов одной книги. Сам неответ (bucket.direction
+    // === "neutral") остается посчитанным от ВСЕХ — это отдельный,
+    // осмысленный сам по себе вопрос ("какая доля вообще не смогла
+    // оценить"), а не часть риск-метрики, поэтому его не трогаем.
+    const neutralBucket = result.find(bucket => bucket.direction === "neutral");
+
+    if (neutralBucket) {
+
+      const total2026 = items.reduce((sum, item) => sum + item.count2026, 0);
+      const total2025 = items.reduce((sum, item) => sum + (item.count2025 || 0), 0);
+
+      const answered2026 = total2026 - neutralBucket.count2026;
+      const answered2025 = total2025 - neutralBucket.count2025;
+
+      result.forEach(bucket => {
+
+        if (bucket.direction === "neutral") return;
+
+        bucket.percent2026 = answered2026 > 0 ? Math.round(bucket.count2026 / answered2026 * 100) : null;
+        bucket.percent2025 = answered2025 > 0 ? Math.round(bucket.count2025 / answered2025 * 100) : null;
+        bucket.delta = (bucket.percent2026 !== null && bucket.percent2025 !== null)
+          ? bucket.percent2026 - bucket.percent2025
+          : null;
+
+      });
+
+    }
+
+    return result;
 
   },
 
@@ -2326,25 +2766,25 @@ const ReportBuilder = {
    * общая для распределений и Топ-5, колонки процента/сравнения
    * появляются только если для них есть данные (hasPercent/hasComparison).
    */
-  renderAnswerTable_(ctx, items, hasComparison, hasPercent) {
+  renderAnswerTable_(ctx, items, hasComparison, hasPercent, currentYear, previousYear) {
 
     const sheet = ctx.sheet;
     const headerRow = ctx.row;
 
     sheet.getRange(headerRow, 1).setValue("Ответ");
-    sheet.getRange(headerRow, 2).setValue("2026, кол-во");
+    sheet.getRange(headerRow, 2).setValue(currentYear + ", кол-во");
 
     let width = 2;
 
     if (hasPercent) {
-      sheet.getRange(headerRow, 3).setValue("2026, %");
+      sheet.getRange(headerRow, 3).setValue(currentYear + ", %");
       width = 3;
     }
 
     if (hasComparison) {
-      sheet.getRange(headerRow, 4).setValue("2025, кол-во");
+      sheet.getRange(headerRow, 4).setValue(previousYear + ", кол-во");
       if (hasPercent) {
-        sheet.getRange(headerRow, 5).setValue("2025, %");
+        sheet.getRange(headerRow, 5).setValue(previousYear + ", %");
       }
       sheet.getRange(headerRow, 6).setValue("Δ");
       width = 6;
@@ -2423,7 +2863,10 @@ const ReportBuilder = {
    * formatLabel, но может отличаться (например, без эмодзи-легенды у
    * rating5 — чтобы не спорить за внимание с основным 2026-списком).
    */
-  renderCompactAnswerList_(ctx, items, hasComparison, formatLabel, formatSummaryLabel, resolveBarColor) {
+  renderCompactAnswerList_(
+    ctx, items, hasComparison, currentYear, previousYear,
+    formatLabel, formatSummaryLabel, resolveBarColor
+  ) {
 
     const summaryLabel = formatSummaryLabel || formatLabel;
     const sheet = ctx.sheet;
@@ -2437,7 +2880,7 @@ const ReportBuilder = {
     const headerRow = ctx.row;
 
     sheet.getRange(headerRow, 1).setValue("Ответ");
-    sheet.getRange(headerRow, 2).setValue("2026");
+    sheet.getRange(headerRow, 2).setValue(currentYear);
 
     if (hasComparison) {
       sheet.getRange(headerRow, 4).setValue("Δ (п.п.)");
@@ -2454,7 +2897,12 @@ const ReportBuilder = {
       const percent2026 = item.percent2026 !== null && item.percent2026 !== undefined ? item.percent2026 : null;
       const rowRange = sheet.getRange(row, 1, 1, width);
 
-      sheet.getRange(row, 1).setValue(formatLabel(item.answer));
+      const labelCell = sheet.getRange(row, 1);
+      labelCell.setValue(formatLabel(item.answer));
+
+      if (item.renamedFrom && item.renamedFrom.length) {
+        Formatter.note(labelCell, "Ранее называлось: " + item.renamedFrom.join(", "));
+      }
 
       const countCell = sheet.getRange(row, 2);
       countCell.setValue(
@@ -2501,7 +2949,7 @@ const ReportBuilder = {
 
       const summaryRow = ctx.row;
 
-      sheet.getRange(summaryRow, 1).setValue("2025: " + summary);
+      sheet.getRange(summaryRow, 1).setValue(previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(summaryRow, 1));
 
       ctx.row += 1;
@@ -2540,7 +2988,7 @@ const ReportBuilder = {
    * используют разные символы намеренно — иначе визуально не отличить,
    * какая стрелка к чему относится (см. formatRankChange_).
    */
-  renderRankedAnswerList_(ctx, items, hasComparison) {
+  renderRankedAnswerList_(ctx, items, hasComparison, previousYear) {
 
     const sheet = ctx.sheet;
 
@@ -2662,7 +3110,7 @@ const ReportBuilder = {
         })
         .join(" • ");
 
-      sheet.getRange(ctx.row, 1).setValue("2025: " + summary);
+      sheet.getRange(ctx.row, 1).setValue(previousYear + ": " + summary);
       Formatter.formatMutedSmall(sheet.getRange(ctx.row, 1));
       ctx.row += 1;
 
@@ -2707,6 +3155,63 @@ const ReportBuilder = {
    * визуально отделены толстой границей сверху и свернуты по
    * умолчанию. Содержимое (заголовки/строки) не меняется.
    */
+  /**
+   * "Состав сквозной когорты" — ФИО участников, только для когортных
+   * отчетов (reportData.cohortOnly). Персональные данные, поэтому раздел
+   * идет отдельно от остальной статистики, сворачивается по умолчанию
+   * и не попадает никуда за пределы этого листа (не в Sidebar, не в
+   * сводную аналитику, не в сигнатуру отчета — см. getReportKey_).
+   *
+   * Состав ограничен reportData.cohortRoster — тем, что уже вернул
+   * Cohort.roster для строк matched.now/matched.before, то есть без
+   * дублей и неподписанных анкет (они не входят в когорту).
+   */
+  renderCohortRoster_(ctx, reportData) {
+
+    if (!reportData.cohortOnly) return;
+
+    const sheet = ctx.sheet;
+    const sectionStartRow = ctx.row;
+    const roster = reportData.cohortRoster || [];
+
+    const titleRange = sheet.getRange(ctx.row, 1, 1, 6);
+    titleRange.setValue(
+      "👥 Состав сквозной когорты (" + roster.length + " " +
+      this.pluralizeRu_(roster.length, ["человек", "человека", "человек"]) + ")"
+    );
+    Formatter.formatSectionTitle(sheet, titleRange);
+    ctx.row += 1;
+
+    const headerRow = ctx.row;
+    const headers = ["ФИО", "ФИО в 2025", "Статус сопоставления"];
+
+    sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+    Formatter.formatRawDataHeader(sheet, sheet.getRange(headerRow, 1, 1, headers.length));
+    ctx.row += 1;
+
+    if (roster.length > 0) {
+
+      const values = roster.map(entry => [
+        entry.nameNow,
+        entry.nameBefore || "",
+        entry.status
+      ]);
+
+      sheet.getRange(ctx.row, 1, values.length, headers.length).setValues(values);
+      ctx.row += values.length;
+
+    }
+
+    const sectionContentRows = ctx.row - 1 - sectionStartRow;
+
+    // Свернуто по умолчанию — это персональные данные, а не показатель
+    // отчета, который должен быть виден сразу при открытии листа.
+    if (sectionContentRows > 0) {
+      Formatter.groupRows(sheet, sectionStartRow + 1, sectionContentRows, true);
+    }
+
+  },
+
   renderRawData_(ctx, reportData) {
 
     const sheet = ctx.sheet;
@@ -2775,6 +3280,26 @@ const ReportBuilder = {
   },
 
   /**
+   * Название когортного отчета — та же схема, что и generateReportName,
+   * но с префиксом "Когорта", а не "Все сотрудники": имя "Когорта" без
+   * дополнения занято листом расширенной аналитики (Cohort.gs), а без
+   * фильтров когортный отчет должен называться иначе, чем обычный.
+   */
+  generateCohortReportName(filters) {
+
+    const activeFilters = (filters || []).filter(filter => this.hasFilterValue(filter));
+
+    if (activeFilters.length === 0) {
+      return "Когортный отчет";
+    }
+
+    const parts = activeFilters.map(filter => this.formatFilterValueOnly_(filter));
+
+    return this.sanitizeSheetName("Когорта • " + parts.join(" • "));
+
+  },
+
+  /**
    * Значение фильтра без названия вопроса (для автогенерируемого
    * названия отчета). Для rating5/enps — оператор+число, для
    * остальных — выбранные варианты через запятую.
@@ -2810,11 +3335,23 @@ const ReportBuilder = {
 
     const normalizedFilters = this.getNormalizedFilters(reportData.filters);
 
-    const payload = JSON.stringify({
+    const payloadObject = {
       source: reportData.source,
       comparison: !!reportData.comparison,
       filters: normalizedFilters
-    });
+    };
+
+    // cohortOnly добавляется в сигнатуру, только когда он включен —
+    // это дает когортному отчету отдельную сигнатуру (он не заменяет
+    // собой обычный отчет с теми же фильтрами и наоборот), но НЕ меняет
+    // сигнатуру обычных отчетов: без этого поля JSON.stringify дает
+    // байт-в-байт то же самое, что и раньше, и уже существующие листы
+    // обычных отчетов по-прежнему находятся по своему старому ключу.
+    if (reportData.cohortOnly) {
+      payloadObject.cohortOnly = true;
+    }
+
+    const payload = JSON.stringify(payloadObject);
 
     return Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, payload, Utilities.Charset.UTF_8)
       .map(byte => ((byte + 256) % 256).toString(16).padStart(2, "0"))
@@ -3204,7 +3741,19 @@ const ReportBuilder = {
       const window = matchingSentences.join(" ");
 
       const hasNegative = entry.negative.some(marker => window.indexOf(marker.toLowerCase()) !== -1);
-      const hasPositive = entry.positive.some(marker => window.indexOf(marker.toLowerCase()) !== -1);
+
+      // Позитивные маркеры ищутся не в исходном window, а после вычитания
+      // всех сработавших негативных маркеров. Без этого "понятно" ложно
+      // засчитывается как позитив внутри "непонятно" (аналогично
+      // "рассказывают" внутри "не рассказывают") — чисто негативный
+      // комментарий получал бы тональность mixed только из-за того, что
+      // негативный маркер целиком содержит позитивный как подстроку.
+      const windowWithoutNegative = entry.negative.reduce((text, marker) => {
+        const lowerMarker = marker.toLowerCase();
+        return window.indexOf(lowerMarker) !== -1 ? text.split(lowerMarker).join(" ") : text;
+      }, window);
+
+      const hasPositive = entry.positive.some(marker => windowWithoutNegative.indexOf(marker.toLowerCase()) !== -1);
 
       const tone = hasNegative && hasPositive ? "mixed" : hasNegative ? "negative" : hasPositive ? "positive" : "neutral";
 

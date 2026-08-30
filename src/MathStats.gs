@@ -162,6 +162,97 @@ const MathStats = {
   },
 
   /**
+   * V Крамера — связь между двумя КАТЕГОРИАЛЬНЫМИ переменными без
+   * порядка (0 — нет связи, 1 — полная связь).
+   *
+   * ПОЧЕМУ НЕ СПИРМЕН/ПИРСОН. Оба требуют порядка значений (ранга или
+   * числа). Для полей вроде «Грейд» (middle/senior/junior/lead) или
+   * «Соответствие ожиданиям» такого порядка нигде в системе не
+   * зафиксировано — придумывать его означало бы подгонять данные под
+   * желаемый результат. V Крамера считает связь по таблице сопряжённости
+   * (кто сколько раз встретился в каждой паре категорий) и не требует
+   * знать, какая категория «больше» другой.
+   *
+   * ЧТО СЧИТАТЬ ЗАМЕТНЫМ (аналогично порогам Спирмена выше, но это
+   * другая шкала — 0..1, не -1..1):
+   *   V < 0,10    — практически нет связи
+   *   0,10–0,30   — слабая
+   *   0,30–0,50   — умеренная
+   *   > 0,50      — сильная
+   * Пороги условны (нет единого стандарта для V Крамера), не строгий норматив.
+   *
+   * @param {Array} a - категориальные значения (строки), с null/"" как пропуск
+   * @param {Array} b - категориальные значения того же размера
+   * @returns {Object|null} {v, chi2, n, table: {rows, cols, counts}} —
+   *   null, если после отбрасывания пропусков нет данных или
+   *   таблица вырождена (меньше 2 категорий по любой из осей)
+   */
+  cramersV(a, b) {
+
+    const x = [];
+    const y = [];
+
+    for (let i = 0; i < a.length; i++) {
+      if (a[i] === null || a[i] === undefined || a[i] === "") continue;
+      if (b[i] === null || b[i] === undefined || b[i] === "") continue;
+      x.push(a[i]);
+      y.push(b[i]);
+    }
+
+    const n = x.length;
+
+    if (n === 0) return null;
+
+    const rows = [];
+    const rowIndex = {};
+    const cols = [];
+    const colIndex = {};
+
+    x.forEach(value => {
+      if (!(value in rowIndex)) {
+        rowIndex[value] = rows.length;
+        rows.push(value);
+      }
+    });
+
+    y.forEach(value => {
+      if (!(value in colIndex)) {
+        colIndex[value] = cols.length;
+        cols.push(value);
+      }
+    });
+
+    if (rows.length < 2 || cols.length < 2) return null;
+
+    const counts = rows.map(() => cols.map(() => 0));
+
+    for (let i = 0; i < n; i++) {
+      counts[rowIndex[x[i]]][colIndex[y[i]]]++;
+    }
+
+    const rowTotals = counts.map(row => row.reduce((sum, c) => sum + c, 0));
+    const colTotals = cols.map((_, j) => counts.reduce((sum, row) => sum + row[j], 0));
+
+    let chi2 = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      for (let j = 0; j < cols.length; j++) {
+        const expected = rowTotals[i] * colTotals[j] / n;
+        if (expected === 0) continue;
+        const diff = counts[i][j] - expected;
+        chi2 += diff * diff / expected;
+      }
+    }
+
+    const minDimension = Math.min(rows.length, cols.length) - 1;
+    const v = minDimension > 0 ? Math.sqrt(chi2 / (n * minDimension)) : null;
+
+    return { v: v !== null ? this.round(v, 3) : null, chi2: this.round(chi2, 2), n: n,
+      table: { rows: rows, cols: cols, counts: counts } };
+
+  },
+
+  /**
    * Среднее и дисперсия по вектору с пропусками.
    */
   describe(vector) {
@@ -208,18 +299,34 @@ const MathStats = {
    * потому что около 80% дисперсия куда выше. Без этого критерия
    * приоритеты были бы расставлены наоборот.
    */
-  zTestProportions(x1, n1, x2, n2) {
+  zTestProportions(x1, n1, x2, n2, N1, N2) {
 
     if (!n1 || !n2) return { z: null, significant: false };
 
+    // Раздельные (unpooled) SE по каждой стороне, а не общая p —
+    // так у каждой группы может быть своя поправка на конечную
+    // совокупность (FPC, см. finitePopulationCorrection): при
+    // сравнении, например, отдела (N известен) с прошлым годом
+    // компании (свой N) объединенная доля p не дает места для двух
+    // разных FPC. См. proportionConfidence.
+    const ci1 = this.proportionConfidence(x1, n1, N1);
+    const ci2 = this.proportionConfidence(x2, n2, N2);
+
+    if (ci1.se === null || ci2.se === null) return { z: null, significant: false };
+
+    // ci.se — "сырой" SE ДО поправки на конечную совокупность (см.
+    // proportionConfidence: fpc возвращается отдельным полем именно
+    // затем, чтобы его можно было применить здесь, а не только к
+    // отображаемому margin).
+    const se1 = ci1.se * ci1.fpc;
+    const se2 = ci2.se * ci2.fpc;
+    const seDiff = Math.sqrt(se1 * se1 + se2 * se2);
+
+    if (seDiff === 0) return { z: null, significant: false };
+
     const p1 = x1 / n1;
     const p2 = x2 / n2;
-    const p = (x1 + x2) / (n1 + n2);
-    const se = Math.sqrt(p * (1 - p) * (1 / n1 + 1 / n2));
-
-    if (se === 0) return { z: null, significant: false };
-
-    const z = (p1 - p2) / se;
+    const z = (p1 - p2) / seDiff;
 
     return {
       z: z,
@@ -248,14 +355,26 @@ const MathStats = {
    * без возни со степенями свободы: разница с точным значением
    * в третьем знаке и на выводы не влияет.
    */
-  welchTest(vectorA, vectorB) {
+  welchTest(vectorA, vectorB, NA, NB) {
+    return this.welchTestFromStats(this.describe(vectorA), this.describe(vectorB), NA, NB);
+  },
 
-    const a = this.describe(vectorA);
-    const b = this.describe(vectorB);
+  /**
+   * То же самое, что welchTest, но принимает уже посчитанные {mean,
+   * variance, n} вместо сырых векторов — для мест, где сохранять
+   * векторы ответов ради одного теста избыточно (например,
+   * ReportBuilder.buildDramaticChangesInput_, где уже есть готовые
+   * mean/count по каждому году из Statistics.calculateAverageRatings).
+   */
+  welchTestFromStats(a, b, NA, NB) {
 
-    if (a.n < 2 || b.n < 2) return { t: null, significant: false };
+    if (!a || !b || a.n < 2 || b.n < 2) return { t: null, significant: false };
 
-    const se = Math.sqrt(a.variance / a.n + b.variance / b.n);
+    // FPC на каждую сторону отдельно (см. finitePopulationCorrection) —
+    // NA/NB не переданы → fpc=1, поведение как раньше.
+    const fpcA = this.finitePopulationCorrection(a.n, NA);
+    const fpcB = this.finitePopulationCorrection(b.n, NB);
+    const se = Math.sqrt((a.variance / a.n) * fpcA * fpcA + (b.variance / b.n) * fpcB * fpcB);
 
     if (se === 0) return { t: null, significant: false };
 
@@ -340,6 +459,44 @@ const MathStats = {
   },
 
   /**
+   * Поправка на конечную совокупность (finite population correction).
+   *
+   * ЗАЧЕМ. Формула ДИ ниже верна для выборки из БЕСКОНЕЧНОЙ
+   * популяции. У отдела популяция конечна и известна — это его штат
+   * из справочника Численность (см. Headcount.gs). Если отдел опрошен
+   * полностью, ошибки выборки нет вообще, и ДИ должен схлопнуться
+   * в 0, а не оставаться широким, как для случайной подвыборки.
+   *
+   *   FPC = sqrt((N − n) / (N − 1))
+   *
+   * ЧЕГО ПОПРАВКА НЕ ДЕЛАЕТ. Она убирает ошибку выборки, но не
+   * убирает смещение неответивших: если из отдела не ответили 30% и
+   * молчали именно недовольные, узкий интервал этого не покажет.
+   * Явка — отдельный флаг (см. Segments.coverageCaveat), не
+   * заменяется этой поправкой.
+   *
+   * ПРАВИЛА:
+   *   N неизвестен (нет знаменателя, напр. срезы "Город"/"Стаж") → 1
+   *     (без поправки), это НЕ то же самое, что n===N.
+   *   N ≤ 1 → 1 (без поправки, вырожденный случай).
+   *   n === N → 0 (полный охват, ошибки выборки нет).
+   *   n > N  → 1 (без поправки). Это ошибка в справочнике численности
+   *     (см. Headcount.gs) — исправляется вручную вне кода, здесь
+   *     только не позволяем ей давать отрицательное подкоренное
+   *     выражение или ложный ноль.
+   */
+  finitePopulationCorrection(n, N) {
+
+    if (N === null || N === undefined) return 1;
+    if (N <= 1) return 1;
+    if (n > N) return 1;
+    if (n === N) return 0;
+
+    return Math.sqrt((N - n) / (N - 1));
+
+  },
+
+  /**
    * Доверительный интервал eNPS.
    *
    * eNPS = %промоутеров − %критиков. Это разность двух долей одной
@@ -348,30 +505,130 @@ const MathStats = {
    *
    *   Var = (p + d) − (p − d)²        где p и d — доли в долях единицы
    *   SE  = sqrt(Var / n)
-   *   ДИ  = eNPS ± 1,96 × SE × 100
+   *   ДИ  = eNPS ± 1,96 × SE × 100 × FPC
    *
-   * ЗАЧЕМ ЭТО НУЖНО. eNPS 2026 = +55,7 ± 5,9, eNPS 2025 = +58,6 ± 6,1.
-   * Интервалы перекрываются почти полностью — значит, разница
-   * в 2,9 пункта НЕ является падением, это шум. Без интервала отчет
-   * объявил бы снижение лояльности, которого нет.
+   * СГЛАЖИВАНИЕ ЛАПЛАСА (для дисперсии, не для точечной оценки).
+   * Если все ответившие попали в одну категорию (например 4 из 4 —
+   * промоутеры), Var обращается в ноль и ДИ лжет об абсолютной
+   * точности. Перед расчетом дисперсии к каждой из трех категорий
+   * (промоутеры/нейтралы/критики) добавляется по одному
+   * псевдонаблюдению:
+   *   p̃ = (промоутеры + 1) / (n + 3)
+   *   d̃ = (критики    + 1) / (n + 3)
+   * Точечная оценка eNPS считается по СЫРЫМ долям и не меняется —
+   * сглаживание касается только ширины интервала. Свойство "ДИ = 0
+   * ⟺ явка 100%" от этого не страдает: сглаживание дает Var > 0 (а
+   * значит margin > 0) всегда, пока FPC не обнулит его при n = N.
    *
-   * И обратная сторона: у отдела из 10 человек интервал получается
-   * ±30 пунктов. Изменение eNPS отдела с +50 до +10 при таком n
-   * статистически неотличимо от случайности. Такие отделы можно
-   * подсвечивать как сигнал, но нельзя объявлять фактом.
+   * ЗАЧЕМ ЭТО НУЖНО. eNPS 2026 = +55,7 ± 5,9 (без FPC, знаменатель
+   * компании тоже конечен — см. вызовы enpsConfidence с populationSize).
+   * eNPS 2025 = +58,6 ± 6,1. Интервалы перекрываются почти полностью —
+   * значит, разница в 2,9 пункта НЕ является падением, это шум. Без
+   * интервала отчет объявил бы снижение лояльности, которого нет.
+   *
+   * И обратная сторона: у отдела из 10 человек интервал без FPC
+   * получается ±30-40 пунктов, даже если это ВЕСЬ отдел. С FPC
+   * (populationSize = штат отдела) при полном охвате интервал
+   * становится 0 — ошибки выборки нет, есть перепись.
+   *
+   * @param {Number} promoters
+   * @param {Number} detractors
+   * @param {Number} total - ответивших (промоутеры+нейтралы+критики)
+   * @param {Number} [populationSize] - штат группы (N) за тот же год
+   *   из справочника Численность; не передавать, если знаменатель
+   *   неизвестен (тогда поправка не применяется).
    */
-  enpsConfidence(promoters, detractors, total) {
+  enpsConfidence(promoters, detractors, total, populationSize) {
 
-    if (!total) return { enps: null, margin: null };
+    if (!total) return { enps: null, margin: null, n: total || 0, se: null, fpc: null };
 
     const p = promoters / total;
     const d = detractors / total;
-    const variance = (p + d) - Math.pow(p - d, 2);
+
+    const nSmoothed = total + 3;
+    const pSmoothed = (promoters + 1) / nSmoothed;
+    const dSmoothed = (detractors + 1) / nSmoothed;
+    const variance = (pSmoothed + dSmoothed) - Math.pow(pSmoothed - dSmoothed, 2);
+    const se = Math.sqrt(variance / nSmoothed);
+
+    const fpc = this.finitePopulationCorrection(total, populationSize);
 
     return {
       enps: (p - d) * 100,
-      margin: 1.96 * Math.sqrt(variance / total) * 100,
-      n: total
+      margin: 1.96 * se * 100 * fpc,
+      n: total,
+      se: se,
+      fpc: fpc
+    };
+
+  },
+
+  /**
+   * Доверительный интервал одной доли (критики/выгорание/уход и
+   * т.п.) — та же логика, что enpsConfidence, но для доли "плохих"
+   * из двух категорий (плохо/не плохо), не трех.
+   *
+   * Сглаживание Лапласа — по одному псевдонаблюдению в каждую из
+   * ДВУХ категорий: p̃ = (x + 1) / (n + 2). Та же причина, что у
+   * eNPS: без него доля 0% или 100% на малой группе дает Var = 0 и
+   * ложный ДИ = 0 там, где опрошена не вся группа.
+   *
+   * @param {Number} x - число "плохих" (критиков/выгорающих/...)
+   * @param {Number} n - ответивших на вопрос
+   * @param {Number} [populationSize] - штат группы (N), см. FPC выше
+   * @returns {{value:Number|null, margin:Number|null, n:Number, se:Number|null, fpc:Number|null}}
+   *   value — точечная доля в процентах (сырая, без сглаживания)
+   */
+  proportionConfidence(x, n, populationSize) {
+
+    if (!n) return { value: null, margin: null, n: n || 0, se: null, fpc: null };
+
+    const p = x / n;
+
+    const nSmoothed = n + 2;
+    const pSmoothed = (x + 1) / nSmoothed;
+    const variance = pSmoothed * (1 - pSmoothed);
+    const se = Math.sqrt(variance / nSmoothed);
+
+    const fpc = this.finitePopulationCorrection(n, populationSize);
+
+    return {
+      value: p * 100,
+      margin: 1.96 * se * 100 * fpc,
+      n: n,
+      se: se,
+      fpc: fpc
+    };
+
+  },
+
+  /**
+   * Доверительный интервал среднего (rating5). Без сглаживания
+   * Лапласа — это не доля из фиксированных категорий, а обычное
+   * среднее по шкале, вырожденная дисперсия (все ответы совпали)
+   * здесь не искажение, а факт: если все 4 человека поставили 5,
+   * SE=0 корректно означает "в этой группе разброса нет", в отличие
+   * от eNPS/доли, где Var=0 — артефакт малой выборки в трех/двух
+   * категориях.
+   *
+   * @param {Number} mean
+   * @param {Number} variance - несмещенная дисперсия (MathStats.describe)
+   * @param {Number} n
+   * @param {Number} [populationSize]
+   */
+  meanConfidence(mean, variance, n, populationSize) {
+
+    if (!n || n < 1) return { value: mean === undefined ? null : mean, margin: null, n: n || 0, se: null, fpc: null };
+
+    const se = n > 1 ? Math.sqrt(variance / n) : 0;
+    const fpc = this.finitePopulationCorrection(n, populationSize);
+
+    return {
+      value: mean,
+      margin: n > 1 ? 1.96 * se * fpc : null,
+      n: n,
+      se: se,
+      fpc: fpc
     };
 
   },
@@ -379,14 +636,20 @@ const MathStats = {
   /**
    * Перекрываются ли доверительные интервалы двух eNPS.
    * Если да — говорить о динамике нельзя.
+   *
+   * Порог — совместная ошибка двух независимых интервалов
+   * (sqrt(marginA² + marginB²)), а не (marginA + marginB) — точная
+   * формула, а не приближение "к sqrt(2)", которое было верно только
+   * при marginA ≈ marginB и занижало порог при сильно разных выборках.
    */
   enpsChangeIsReal(ciA, ciB) {
 
     if (ciA.enps === null || ciB.enps === null) return null;
 
     const gap = Math.abs(ciA.enps - ciB.enps);
+    const jointMargin = Math.sqrt(ciA.margin * ciA.margin + ciB.margin * ciB.margin);
 
-    return gap > (ciA.margin + ciB.margin) / 1.4;
+    return gap > jointMargin;
 
   },
 

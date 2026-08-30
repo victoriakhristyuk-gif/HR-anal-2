@@ -8,37 +8,44 @@ const Statistics = {
 
   /**
    * Расчет eNPS
+   *
+   * HR-002: категоризация (Scoring.enpsCategory) и знаменатель
+   * (Scoring.vector) — те же, что в AnalyticsService/Segments/Cohort/
+   * Drivers, поэтому основной отчет, сводная и расширенная аналитика
+   * больше не могут разойтись по eNPS/категориям/базе. Раньше здесь
+   * читали Number(row[enpsColumn]) напрямую и отсеивали только isNaN —
+   * а Number("") === 0, из-за чего пустая ячейка eNPS молча считалась
+   * критиком. Scoring.vector корректно возвращает для нее null.
    */
-  calculateENPS(rows, headers) {
+  calculateENPS(rows, headers, populationSize) {
+
+    const enpsQuestion = Questions.getAll().find(question => question.type === "enps");
 
     // Сравнение без учета регистра/пробелов — см. calculateDistribution.
     const enpsColumn = headers.findIndex(header => this.normalize_(header) === "enps");
 
-    if (enpsColumn === -1) {
+    if (!enpsQuestion || enpsColumn === -1) {
       throw new Error("Не найден столбец eNPS");
     }
+
+    const vector = Scoring.vector(rows, headers, enpsQuestion);
 
     let promoters = 0;
     let neutrals = 0;
     let detractors = 0;
 
-    rows.forEach(row => {
+    vector.forEach(value => {
 
-      const value = Number(row[enpsColumn]);
+      const category = Scoring.enpsCategory(value);
 
-      if (isNaN(value)) return;
-
-      if (value >= 9) {
-        promoters++;
-      } else if (value >= 7) {
-        neutrals++;
-      } else {
-        detractors++;
-      }
+      if (category === "promoters") promoters++;
+      else if (category === "neutrals") neutrals++;
+      else if (category === "detractors") detractors++;
 
     });
 
     const total = promoters + neutrals + detractors;
+    const ci = total ? MathStats.enpsConfidence(promoters, detractors, total, populationSize) : null;
 
     return {
       promoters,
@@ -50,9 +57,12 @@ const Statistics = {
       neutralsPercent: total ? Math.round(neutrals / total * 100) : 0,
       detractorsPercent: total ? Math.round(detractors / total * 100) : 0,
 
-      enps: total
-        ? Math.round(((promoters - detractors) / total) * 100)
-        : 0
+      enps: ci ? Math.round(ci.enps) : 0,
+
+      // Доверительный интервал (±п.п., 95%) для той же выборки — нужен,
+      // чтобы Comparison.compareENPS мог отличить реальную динамику
+      // от шума (MathStats.enpsChangeIsReal), а не только показать дельту.
+      margin: ci ? MathStats.round(ci.margin, 1) : null
     };
 
   },
@@ -60,32 +70,26 @@ const Statistics = {
   /**
    * Средние оценки
    */
-  calculateAverageRatings(rows, headers) {
+  calculateAverageRatings(rows, headers, populationSize) {
 
-    const questions = Questions
-      .getAverageQuestions()
-      .map(q => q.title);
-
+    const questions = Questions.getAverageQuestions();
     const result = [];
 
     questions.forEach(question => {
 
-      // Сравнение без учета регистра/пробелов — см. calculateDistribution.
-      const column = headers.findIndex(header => this.normalize_(header) === this.normalize_(question));
+      const columnTitle = question.dataTitle || question.title;
+      const column = headers.findIndex(header => this.normalize_(header) === this.normalize_(columnTitle));
 
       if (column === -1) return;
 
-      let sum = 0;
-      let count = 0;
+      const min = Scoring.minFor(question);
+      const max = Scoring.maxFor(question);
+      const values = [];
 
       rows.forEach(row => {
 
         const raw = row[column];
 
-        // Пустой ответ нужно исключить ДО Number(): Number("") === 0,
-        // поэтому без этой проверки пропущенный вопрос молча считался
-        // бы оценкой "0" и занижал среднее (тот же случай пропусков,
-        // что уже обрабатывается в calculateDistribution).
         if (raw === "" || raw === null || raw === undefined) {
           return;
         }
@@ -94,15 +98,28 @@ const Statistics = {
 
         if (isNaN(value)) return;
 
-        sum += value;
-        count++;
+        if (value < min || value > max) {
+          console.warn("Statistics: значение " + value + " вне шкалы [" + min + "–" + max + "] для «" + question.title + "», пропущено");
+          return;
+        }
+
+        values.push(value);
 
       });
 
+      // stats (mean/variance/n через MathStats.describe) — нужен для
+      // welchTest в ReportBuilder.buildDramaticChangesInput_ (HR-002),
+      // чтобы отличить драматичный, но статистически шумный сдвиг
+      // среднего балла от реального изменения.
+      const stats = MathStats.describe(values);
+      const ci = MathStats.meanConfidence(stats.mean, stats.variance, stats.n, populationSize);
+
       result.push({
-        question: question,
-        average: count ? +(sum / count).toFixed(2) : 0,
-        count: count
+        question: question.title,
+        average: stats.n ? +(stats.mean).toFixed(2) : 0,
+        count: stats.n,
+        variance: stats.variance,
+        ciMargin: ci.margin !== null ? MathStats.round(ci.margin, 2) : null
       });
 
     });
@@ -122,7 +139,7 @@ const Statistics = {
     // Questions.gs (например, "о жизни компании" вместо "О жизни
     // компании"), из-за которых indexOf() не находил столбец.
     const columnIndex = headers.findIndex(
-      header => this.normalize_(header) === this.normalize_(question.title)
+      header => this.normalize_(header) === this.normalize_(question.dataTitle || question.title)
     );
 
     if (columnIndex === -1) {
@@ -146,6 +163,7 @@ const Statistics = {
       const index = normalizedOrder.indexOf(this.normalize_(raw));
 
       if (index === -1) {
+        console.warn("Statistics: ответ «" + raw + "» не входит в шкалу для «" + (question.dataTitle || question.title) + "», пропущен");
         return;
       }
 
@@ -190,7 +208,7 @@ const Statistics = {
    * Нормализация строки для сравнения без учета регистра и пробелов
    */
   normalize_(value) {
-    return String(value).trim().toLowerCase();
+    return String(value).trim().toLowerCase().replace(/\s+/g, " ");
   },
 
   /**
@@ -205,7 +223,7 @@ const Statistics = {
 
     // Сравнение без учета регистра/пробелов — см. calculateDistribution.
     const columnIndex = headers.findIndex(
-      header => this.normalize_(header) === this.normalize_(question.title)
+      header => this.normalize_(header) === this.normalize_(question.dataTitle || question.title)
     );
 
     if (columnIndex === -1) {

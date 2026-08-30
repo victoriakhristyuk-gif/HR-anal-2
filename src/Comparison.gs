@@ -33,14 +33,15 @@ const Comparison = {
    * @param {Array<Object>} topAnswerFrequencies2026 - {question, frequencies: {items, validCount}}
    * @param {Array<Object>} topAnswerFrequencies2025
    */
-  build(stats2026, stats2025, distributions2026, distributions2025, topAnswerFrequencies2026, topAnswerFrequencies2025) {
+  build(stats2026, stats2025, distributions2026, distributions2025, topAnswerFrequencies2026, topAnswerFrequencies2025,
+    headcount2026, headcount2025) {
 
     return {
       employees2026: stats2026.employees,
       employees2025: stats2025.employees,
-      enps: this.compareENPS(stats2026.enps, stats2025.enps),
-      averageRatings: this.compareAverageRatings(stats2026.averageRatings, stats2025.averageRatings),
-      distributions: this.compareDistributions(distributions2026 || [], distributions2025 || []),
+      enps: this.compareENPS(stats2026.enps, stats2025.enps, headcount2026, headcount2025),
+      averageRatings: this.compareAverageRatings(stats2026.averageRatings, stats2025.averageRatings, headcount2026, headcount2025),
+      distributions: this.compareDistributions(distributions2026 || [], distributions2025 || [], headcount2026, headcount2025),
       topAnswers: this.compareTopAnswers(topAnswerFrequencies2026 || [], topAnswerFrequencies2025 || [])
     };
 
@@ -50,11 +51,23 @@ const Comparison = {
    * Разница eNPS в процентных пунктах. Если в одном из годов нет ни
    * одного ответа — значение и динамика не подставляются нулем, а
    * остаются null.
+   *
+   * significant — перекрываются ли доверительные интервалы (HR-002):
+   * true/false, если оба года посчитаны, иначе null. Без этого поля
+   * отчет красит любую дельту как тренд, даже если она внутри шума
+   * (см. MathStats.enpsConfidence).
    */
-  compareENPS(enps2026, enps2025) {
+  compareENPS(enps2026, enps2025, headcount2026, headcount2025) {
 
     const value2026 = enps2026.total > 0 ? enps2026.enps : null;
     const value2025 = enps2025.total > 0 ? enps2025.enps : null;
+
+    const significant = (value2026 !== null && value2025 !== null)
+      ? MathStats.enpsChangeIsReal(
+          { enps: value2026, margin: enps2026.margin },
+          { enps: value2025, margin: enps2025.margin }
+        )
+      : null;
 
     return {
       value2026: value2026,
@@ -62,7 +75,10 @@ const Comparison = {
       delta: (value2026 !== null && value2025 !== null)
         ? value2026 - value2025
         : null,
-      categories: this.compareEnpsCategories_(enps2026, enps2025)
+      margin2026: enps2026.margin,
+      margin2025: enps2025.margin,
+      significant: significant,
+      categories: this.compareEnpsCategories_(enps2026, enps2025, headcount2026, headcount2025)
     };
 
   },
@@ -74,7 +90,7 @@ const Comparison = {
    * пунктах. Не пересчитывает eNPS — только сопоставляет уже готовые
    * enps2026/enps2025 от Statistics.calculateENPS.
    */
-  compareEnpsCategories_(enps2026, enps2025) {
+  compareEnpsCategories_(enps2026, enps2025, headcount2026, headcount2025) {
 
     return ["promoters", "neutrals", "detractors"].map(category => {
 
@@ -82,6 +98,13 @@ const Comparison = {
 
       const percent2026 = enps2026.total > 0 ? enps2026[percentKey] : null;
       const percent2025 = enps2025.total > 0 ? enps2025[percentKey] : null;
+
+      const significant = (percent2026 !== null && percent2025 !== null)
+        ? MathStats.zTestProportions(
+            enps2026[category], enps2026.total, enps2025[category], enps2025.total,
+            headcount2026, headcount2025
+          ).significant
+        : null;
 
       return {
         category: category,
@@ -91,7 +114,8 @@ const Comparison = {
         percent2025: percent2025,
         delta: (percent2026 !== null && percent2025 !== null)
           ? percent2026 - percent2025
-          : null
+          : null,
+        significant: significant
       };
 
     });
@@ -104,7 +128,7 @@ const Comparison = {
    * возвращает их в порядке каталога Questions для каждого года
    * независимо.
    */
-  compareAverageRatings(ratings2026, ratings2025) {
+  compareAverageRatings(ratings2026, ratings2025, headcount2026, headcount2025) {
 
     const byQuestion2025 = {};
     ratings2025.forEach(item => { byQuestion2025[item.question] = item; });
@@ -116,13 +140,25 @@ const Comparison = {
       const value2026 = item2026.count > 0 ? item2026.average : null;
       const value2025 = (item2025 && item2025.count > 0) ? item2025.average : null;
 
+      // welchTest (HR-002) — та же проверка значимости, что и для долей
+      // в compareDistributionItems, только для среднего балла. null,
+      // если сравнивать не с чем (см. value2026/value2025 выше).
+      const significant = (value2026 !== null && value2025 !== null)
+        ? MathStats.welchTestFromStats(
+            { mean: item2026.average, variance: item2026.variance, n: item2026.count },
+            { mean: item2025.average, variance: item2025.variance, n: item2025.count },
+            headcount2026, headcount2025
+          ).significant
+        : null;
+
       return {
         question: item2026.question,
         value2026: value2026,
         value2025: value2025,
         delta: (value2026 !== null && value2025 !== null)
           ? +(value2026 - value2025).toFixed(2)
-          : null
+          : null,
+        significant: significant
       };
 
     });
@@ -136,7 +172,7 @@ const Comparison = {
    * годов (задается Statistics.getDistributionOrder_/Questions), поэтому
    * порядок вариантов не пересортировывается и не зависит от частоты.
    */
-  compareDistributions(distributions2026, distributions2025) {
+  compareDistributions(distributions2026, distributions2025, headcount2026, headcount2025) {
 
     const byQuestionTitle2025 = {};
     distributions2025.forEach(d => { byQuestionTitle2025[d.question.title] = d; });
@@ -147,7 +183,12 @@ const Comparison = {
 
       return {
         question: d2026.question,
-        items: this.compareDistributionItems(d2026.items, d2025 ? d2025.items : [])
+        items: this.compareDistributionItems(
+          d2026.items,
+          d2025 ? d2025.items : [],
+          d2026.question.title,
+          headcount2026, headcount2025
+        )
       };
 
     });
@@ -167,18 +208,9 @@ const Comparison = {
    * ReportService при подсчете distributions2025 для сравнения годов —
    * сама filteredData2025 (сырые данные, фильтры, eNPS/средние оценки
    * 2025) не трогается, здесь применяется только к копии строк.
-   */
-  DEPARTMENT_NAME_MAP_2025_TO_2026_: {
-    "Отдел сетевого администрирования": "Отдел сетевых технологий",
-    "Отдел локализации": "Отдел локализации и перевода",
-    "Отдел программируемых микрокотроллеров": "Отдел программируемых микроконтроллеров"
-  },
-
-  /**
-   * Копия rows с приведенным к 2026 названию отдела (см.
-   * DEPARTMENT_NAME_MAP_2025_TO_2026_) в столбце "Отдел" — для вызова
-   * Statistics.calculateDistribution по 2025 году. Если столбца "Отдел"
-   * нет в headers — возвращает rows как есть.
+   *
+   * Таблица алиасов вынесена в DepartmentAliases (справочник
+   * оргструктуры) — здесь только применение к строкам одного года.
    */
   remapDepartmentRows_(rows, headers) {
 
@@ -190,21 +222,16 @@ const Comparison = {
       return rows;
     }
 
-    const normalizedMap = {};
-    Object.keys(this.DEPARTMENT_NAME_MAP_2025_TO_2026_).forEach(oldName => {
-      normalizedMap[Statistics.normalize_(oldName)] = this.DEPARTMENT_NAME_MAP_2025_TO_2026_[oldName];
-    });
-
     return rows.map(row => {
 
-      const mappedAnswer = normalizedMap[Statistics.normalize_(row[columnIndex])];
+      const canonicalAnswer = DepartmentAliases.canonicalize(row[columnIndex]);
 
-      if (!mappedAnswer) {
+      if (canonicalAnswer === row[columnIndex]) {
         return row;
       }
 
       const newRow = row.slice();
-      newRow[columnIndex] = mappedAnswer;
+      newRow[columnIndex] = canonicalAnswer;
       return newRow;
 
     });
@@ -225,11 +252,18 @@ const Comparison = {
    * присутствует в результате (со значением count 0 для этого года) —
    * т.к. оба года считаются по одному и тому же вопросу/каталогу
    * вариантов ответа.
+   *
+   * Для вопроса "Отдел" (questionTitle) каждая строка получает
+   * renamedFrom — известные прежние названия этого отдела
+   * (DepartmentAliases), т.е. примечание о переименовании. Для
+   * остальных вопросов — всегда пустой массив.
    */
-  compareDistributionItems(items2026, items2025) {
+  compareDistributionItems(items2026, items2025, questionTitle, headcount2026, headcount2025) {
 
     const total2026 = items2026.reduce((sum, item) => sum + item.count, 0);
     const total2025 = items2025.reduce((sum, item) => sum + item.count, 0);
+
+    const isDepartmentQuestion = Statistics.normalize_(questionTitle) === Statistics.normalize_("Отдел");
 
     const byAnswer2025 = {};
     items2025.forEach(item => { byAnswer2025[item.answer] = item; });
@@ -244,6 +278,13 @@ const Comparison = {
       const percent2026 = total2026 > 0 ? item2026.percent : null;
       const percent2025 = total2025 > 0 ? (item2025 ? item2025.percent : 0) : null;
 
+      // zTestProportions (HR-002) — та же проверка значимости, что и
+      // для eNPS/среднего балла (compareEnpsCategories_/
+      // compareAverageRatings), для доли конкретного варианта ответа.
+      const significant = (percent2026 !== null && percent2025 !== null)
+        ? MathStats.zTestProportions(count2026, total2026, count2025, total2025, headcount2026, headcount2025).significant
+        : null;
+
       return {
         answer: item2026.answer,
         count2026: count2026,
@@ -252,7 +293,9 @@ const Comparison = {
         percent2025: percent2025,
         delta: (percent2026 !== null && percent2025 !== null)
           ? percent2026 - percent2025
-          : null
+          : null,
+        significant: significant,
+        renamedFrom: isDepartmentQuestion ? DepartmentAliases.getAliasesFor(item2026.answer) : []
       };
 
     });

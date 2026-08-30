@@ -52,7 +52,9 @@ const Summary = {
     number: 90,
     distribution: 300,
     top: 300,
-    average: 80
+    average: 80,
+    headcount: 100,
+    responseRate: 90
   },
 
   /**
@@ -78,7 +80,7 @@ const Summary = {
     { block: "Демография", title: "Стаж", kind: "distribution", question: "Стаж" },
     { block: "Демография", title: "Формат работы", kind: "distribution", question: "Формат работы" },
 
-    { block: "Распределения", title: "График", kind: "distribution", question: "График" },
+    { block: "Распределения", title: "Work-life balance", kind: "distribution", question: "Work-life balance" },
     { block: "Распределения", title: "Задачи", kind: "distribution", question: "Задачи" },
     { block: "Распределения", title: "Ожидания", kind: "distribution", question: "Ожидания" },
     { block: "Распределения", title: "Проф мнение", kind: "distribution", question: "Проф мнение" },
@@ -112,8 +114,18 @@ const Summary = {
     { block: "Средние оценки", title: "Курсы английского", kind: "average", question: "Курсы английского" },
     { block: "Средние оценки", title: "ДМС", kind: "average", question: "ДМС" },
     { block: "Средние оценки", title: "Мерч за достижения", kind: "average", question: "Мерч за достижения" },
-    { block: "Средние оценки", title: "Задачи 2", kind: "average", question: "Задачи 2" },
-    { block: "Средние оценки", title: "ЗП", kind: "average", question: "ЗП" }
+    { block: "Средние оценки", title: "Удовл. раб. задачами", kind: "average", question: "Удовлетворенность рабочими задачами" },
+    { block: "Средние оценки", title: "ЗП", kind: "average", question: "ЗП" },
+
+    // Добавлены в конец, чтобы существующий сводный лист можно было
+    // безопасно расширить без сдвига уже накопленных данных.
+    { block: "Явка", title: "Приглашены", kind: "headcount" },
+    { block: "Явка", title: "Явка, %", kind: "responseRate" },
+
+    // Company-wide сигналы из расширенного контура для этого же среза
+    // (см. src/SegmentContext.gs) — пусто, если фильтр отчета не бьет
+    // однозначно в один бакет измерения (отдел/стаж/город/...).
+    { block: "Контекст по компании", title: "Отклонения (расш. контур)", kind: "segmentContext" }
 
   ],
 
@@ -170,6 +182,63 @@ const Summary = {
   },
 
   /**
+   * Обновить текст гиперссылок в столбце "Выборка", если лист отчета
+   * был переименован вручную. Ссылка (gid) остается рабочей, но
+   * отображаемое название устаревает — здесь оно подтягивается из
+   * текущего sheet.getName().
+   */
+  syncSampleNames(ss) {
+
+    const sheet = this.findSheetByMetadata_(ss);
+
+    if (!sheet) {
+      return;
+    }
+
+    const lastRow = sheet.getLastRow();
+
+    if (lastRow < this.FIRST_DATA_ROW) {
+      return;
+    }
+
+    const sampleColumn = this.KEY_COLUMN + 1;
+    const rowCount = lastRow - this.FIRST_DATA_ROW + 1;
+
+    const formulas = sheet
+      .getRange(this.FIRST_DATA_ROW, sampleColumn, rowCount, 1)
+      .getFormulas();
+
+    const displayed = sheet
+      .getRange(this.FIRST_DATA_ROW, sampleColumn, rowCount, 1)
+      .getDisplayValues();
+
+    const sheetsById = {};
+    ss.getSheets().forEach(function (s) { sheetsById[String(s.getSheetId())] = s; });
+
+    for (var i = 0; i < rowCount; i++) {
+
+      var gid = this.extractGid_(formulas[i][0]);
+
+      if (gid === null) {
+        continue;
+      }
+
+      var target = sheetsById[gid];
+
+      if (!target) {
+        continue;
+      }
+
+      if (displayed[i][0] !== target.getName()) {
+        sheet.getRange(this.FIRST_DATA_ROW + i, sampleColumn)
+          .setFormula(this.buildSampleLink_(target));
+      }
+
+    }
+
+  },
+
+  /**
    * Лист сводной: найти по метке или создать и оформить.
    * В отличие от листа отчета никогда не пересоздается — иначе
    * потерялись бы строки всех остальных выборок.
@@ -184,6 +253,7 @@ const Summary = {
     const existing = this.findSheetByMetadata_(ss);
 
     if (existing) {
+      this.migrateCoverageColumns_(existing);
       return existing;
     }
 
@@ -208,6 +278,42 @@ const Summary = {
     this.renderHeader_(sheet);
 
     return sheet;
+
+  },
+
+  /**
+   * Безопасная миграция сводной предыдущего формата: два новых столбца
+   * добавляются только если вся старая шапка совпадает и справа нет
+   * пользовательских столбцов. Существующие данные не сдвигаются.
+   */
+  migrateCoverageColumns_(sheet) {
+
+    const addedColumns = 2;
+    const legacyColumns = this.COLUMNS.slice(0, this.COLUMNS.length - addedColumns);
+    const legacyTotalColumns = legacyColumns.length + 1;
+    const lastColumn = sheet.getLastColumn();
+
+    if (lastColumn === this.totalColumns_() || lastColumn !== legacyTotalColumns) return;
+
+    const actualTitles = sheet
+      .getRange(this.HEADER_ROW, this.KEY_COLUMN + 1, 1, legacyColumns.length)
+      .getValues()[0];
+    const titlesMatch = legacyColumns.every(
+      (column, index) => String(actualTitles[index]) === column.title
+    );
+
+    if (!titlesMatch) return;
+
+    const missingColumns = this.totalColumns_() - sheet.getMaxColumns();
+    if (missingColumns > 0) {
+      sheet.insertColumnsAfter(sheet.getMaxColumns(), missingColumns);
+    }
+
+    this.renderHeaderValues_(sheet);
+    for (let index = this.COLUMNS.length - addedColumns; index < this.COLUMNS.length; index++) {
+      const column = this.COLUMNS[index];
+      sheet.setColumnWidth(this.KEY_COLUMN + 1 + index, this.WIDTH_[column.kind] || this.WIDTH_.number);
+    }
 
   },
 
@@ -575,10 +681,21 @@ const Summary = {
    */
   buildSampleKey_(reportData) {
 
-    return JSON.stringify({
+    const keyObject = {
       source: reportData.source,
       filters: ReportBuilder.getNormalizedFilters(reportData.filters)
-    });
+    };
+
+    // Как и в ReportBuilder.getReportKey_: cohortOnly входит в ключ,
+    // только когда он включен, поэтому ключи уже существующих строк
+    // обычных отчетов (без этого поля) продолжают читаться как прежде,
+    // а когортная выборка получает СВОЮ строку — даже с теми же
+    // фильтрами, что и обычный отчет за 2026.
+    if (reportData.cohortOnly) {
+      keyObject.cohortOnly = true;
+    }
+
+    return JSON.stringify(keyObject);
 
   },
 
@@ -621,6 +738,20 @@ const Summary = {
       return (employees === null || employees === undefined) ? "" : employees;
     }
 
+    if (column.kind === "headcount") {
+      const value = reportData.headcountByYear
+        ? reportData.headcountByYear[reportData.source]
+        : null;
+      return (value === null || value === undefined) ? "" : value;
+    }
+
+    if (column.kind === "responseRate") {
+      const value = reportData.responseRateByYear
+        ? reportData.responseRateByYear[reportData.source]
+        : null;
+      return (value === null || value === undefined) ? "" : value;
+    }
+
     if (column.kind === "enps") {
       const value = this.enpsValue_(reportData, column.year);
       return value === null ? "" : value;
@@ -641,6 +772,10 @@ const Summary = {
 
     if (column.kind === "average") {
       return this.formatAverage_(lookups.averages[column.question]);
+    }
+
+    if (column.kind === "segmentContext") {
+      return this.formatSegmentContext_(reportData.segmentContext);
     }
 
     throw new Error("Summary: неизвестный тип столбца \"" + column.kind + "\"");
@@ -757,6 +892,27 @@ const Summary = {
   formatAverage_(item) {
 
     return (item && item.count > 0) ? item.average : "";
+
+  },
+
+  /**
+   * Company-wide сигналы из расширенного контура (см. SegmentContext.gs)
+   * одной строкой — одна сводная не терпит многострочных ячеек, как у
+   * distribution/top (см. MONO_FONT), поэтому здесь просто перечисление
+   * через "; ", без выравнивания.
+   */
+  formatSegmentContext_(segments) {
+
+    if (!segments || segments.length === 0) return "";
+
+    return segments
+      .map(segment => {
+        const badCount = segment.deviations.filter(d => d.bad).length;
+        return segment.dimension + ": " + badCount + " " +
+          ReportBuilder.pluralizeRu_(badCount, ["отклонение", "отклонения", "отклонений"]) +
+          (segment.confirmed ? " (подтверждено)" : "");
+      })
+      .join("; ");
 
   },
 

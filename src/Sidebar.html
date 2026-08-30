@@ -254,31 +254,6 @@
         font-size: 12px;
       }
 
-      .dept-groups {
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        padding: 8px 10px;
-        margin-bottom: 8px;
-      }
-
-      .dept-group-row {
-        display: flex;
-        align-items: center;
-        font-weight: 600;
-        font-size: 13px;
-        margin-bottom: 4px;
-      }
-
-      .dept-group-row:last-child {
-        margin-bottom: 0;
-      }
-
-      .dept-group-row input[type="checkbox"] {
-        width: auto;
-        accent-color: var(--primary);
-        margin: 0 8px 0 0;
-      }
-
       .report-line {
         margin-top: 2px;
       }
@@ -593,6 +568,17 @@
     <h1>HR Analytics</h1>
 
     <div class="card">
+      <p class="eyebrow">Режим</p>
+      <label for="workMode">Режим:</label>
+      <div class="select-wrap">
+        <select id="workMode">
+          <option value="report" selected>Обычный отчет</option>
+          <option value="compare">Сравнить выборки (два набора фильтров)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
       <p class="eyebrow">Источник данных</p>
       <label for="dataSource">Источник данных:</label>
       <div class="select-wrap">
@@ -608,6 +594,17 @@
           <input type="checkbox" id="compareWith2025">
           <span class="slider"></span>
         </label>
+      </div>
+
+      <div id="cohortBlock" class="row-between" style="display:none;">
+        <span>Только сквозная когорта — сотрудники, ответившие в 2025 и 2026</span>
+        <label class="switch">
+          <input type="checkbox" id="cohortOnly">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div id="cohortHint" class="hint" style="display:none;">
+        Отчет будет построен только по сотрудникам, ответившим оба года, и будет содержать их ФИО.
       </div>
     </div>
 
@@ -628,6 +625,12 @@
         <button type="button" class="btn-ghost" id="addFilterBtn">+ Добавить фильтр</button>
       </div>
 
+      <div id="compareStageInfo" class="hint" style="display:none;"></div>
+
+      <div class="ghost-row">
+        <button type="button" class="btn-ghost" id="saveSampleABtn" style="display:none;">Сохранить выборку A и перейти к B →</button>
+      </div>
+
       <div id="activeFilters"></div>
 
       <div id="filtersError"></div>
@@ -635,7 +638,7 @@
 
     <div class="card">
       <p class="eyebrow">Отчёт</p>
-      <label for="reportName">Название отчета (необязательно)</label>
+      <label for="reportName" id="reportNameLabel">Название отчета (необязательно)</label>
       <input type="text" id="reportName" placeholder="Например: Отдел продаж">
       <div id="reportNameHint" class="hint" style="display:none;">
         Отчетов будет несколько — каждый называется своим значением фильтра.
@@ -653,66 +656,24 @@
       var filterQuestions = [];
       var activeFilters = [];
 
-      var DEPARTMENT_QUESTION_TITLE = 'Отдел';
+      // Режим "Сравнить выборки" (2-4 среза одного источника):
+      // activeFilters/reportName переиспользуются как редактор ТЕКУЩЕЙ
+      // (последней, еще не сохраненной) выборки. sampleList — уже
+      // сохраненные предыдущие выборки; при отправке к ним добавляется
+      // текущий activeFilters как последний элемент. Буквы A/B/C/D — тот
+      // же порядок, что и SAMPLE_COMPARISON_LETTERS на сервере
+      // (SampleComparisonService.gs).
+      var COMPARE_SAMPLE_LETTERS = ['A', 'B', 'C', 'D'];
+      var COMPARE_MAX_SAMPLES = COMPARE_SAMPLE_LETTERS.length;
+      var sampleList = []; // [{ filters, name }] — сохраненные выборки, ДО текущей редактируемой
 
-      /**
-       * Группы отделов ("управления") для быстрого выбора в фильтре
-       * "Отдел". Выбор группы заменяет текущую выборку отделов и
-       * взаимоисключает выбор другой группы. Названия отделов должны
-       * дословно совпадать со значениями в Questions.gs — часть отделов
-       * из исходных списков управлений не входит в опросник и здесь не
-       * учтена (сверено и подтверждено отдельно).
-       */
-      var DEPARTMENT_GROUPS = [
-        {
-          id: 'itUpravlenie',
-          title: 'IT-управление',
-          departments: [
-            'HR-отдел',
-            'Администрация IT',
-            'PR-отдел',
-            'Отдел внедрения и обслуживания учетных систем',
-            'Отдел информационной безопасности инфраструктуры',
-            'Отдел обслуживания платежных систем',
-            'Отдел обучения',
-            'Отдел поддержки и управления сервисами IP-телефонии',
-            'Отдел программируемых микроконтроллеров',
-            'Отдел промышленной автоматизации',
-            'Отдел связи',
-            'Отдел серверных решений и СХД',
-            'Отдел сетевых технологий',
-            'Отдел системного администрирования',
-            'Отдел технической поддержки',
-            'Отдел эксплуатации сети'
-          ]
-        },
-        {
-          id: 'razrabotkaPo',
-          title: 'Управление разработки ПО',
-          departments: [
-            'Отдел автоматизации операционной деятельности',
-            'Отдел аналитики и управления данными',
-            'Отдел бизнес-анализа',
-            'Отдел локализации и перевода',
-            'Отдел поддержки прикладного программного обеспечения',
-            'Отдел проектирования и дизайна интерфейсов',
-            'Отдел развития продуктов',
-            'Отдел разработки биллинг сервисов',
-            'Отдел разработки водительских сервисов',
-            'Отдел разработки гео сервисов',
-            'Отдел разработки интегрированных систем',
-            'Отдел разработки инфраструктурных сервисов',
-            'Отдел разработки клиентских сервисов',
-            'Отдел разработки мобильного ПО',
-            'Отдел разработки сайтов',
-            'Отдел разработки сервисов заказа',
-            'Отдел разработки технической документации',
-            'Отдел системного анализа',
-            'Отдел тестирования ПО',
-            'Отдел управления процессами'
-          ]
-        }
-      ];
+      function isCompareMode() {
+        return document.getElementById('workMode').value === 'compare';
+      }
+
+      function currentSampleLetter() {
+        return COMPARE_SAMPLE_LETTERS[sampleList.length];
+      }
 
       function isOperatorType(type) {
         return type === 'rating5' || type === 'enps';
@@ -782,10 +743,6 @@
 
           var multiselectUI = buildMultiselectUI(optionsSelect);
 
-          if (question.question === DEPARTMENT_QUESTION_TITLE) {
-            editor.appendChild(renderDepartmentGroups(optionsSelect, multiselectUI.refresh));
-          }
-
           editor.appendChild(optionsSelect);
           editor.appendChild(multiselectUI.element);
           editor.appendChild(renderModeRow());
@@ -795,9 +752,9 @@
       /**
        * Визуальная надстройка над скрытым select[multiple].filterOptions:
        * чипы выбранных значений, поиск по списку и чекбоксы. Сам select
-       * остаётся источником истины — addFilterFromEditor и синхронизация
-       * групп отделов продолжают читать/писать его через selectedOptions
-       * и option.selected, не зная о существовании этой надстройки.
+       * остаётся источником истины — addFilterFromEditor читает/пишет его
+       * через selectedOptions и option.selected, не зная о существовании
+       * этой надстройки.
        */
       function buildMultiselectUI(optionsSelect) {
         var wrap = document.createElement('div');
@@ -940,74 +897,6 @@
       }
 
       /**
-       * Блок быстрого выбора управлений над списком отделов. Отмечает
-       * группу отделов заменой текущей выборки в select; выбор одной
-       * группы снимает отметку с другой. Ручное изменение самого select
-       * ниже синхронизирует отметки — группа остается отмеченной, только
-       * если её отделы выбраны в select точь-в-точь.
-       */
-      function renderDepartmentGroups(optionsSelect, onGroupApplied) {
-        var container = document.createElement('div');
-        container.className = 'dept-groups';
-
-        DEPARTMENT_GROUPS.forEach(function(group) {
-          var label = document.createElement('label');
-          label.className = 'dept-group-row';
-
-          var checkbox = document.createElement('input');
-          checkbox.type = 'checkbox';
-          checkbox.className = 'deptGroupCheckbox';
-          checkbox.dataset.groupId = group.id;
-
-          checkbox.addEventListener('change', function() {
-            if (checkbox.checked) {
-              applyDepartmentGroup(group, optionsSelect, container);
-              if (onGroupApplied) {
-                onGroupApplied();
-              }
-            }
-          });
-
-          label.appendChild(checkbox);
-          label.appendChild(document.createTextNode(group.title));
-          container.appendChild(label);
-        });
-
-        optionsSelect.addEventListener('change', function() {
-          syncDepartmentGroupCheckboxes(optionsSelect, container);
-        });
-
-        return container;
-      }
-
-      function applyDepartmentGroup(group, optionsSelect, container) {
-        container.querySelectorAll('.deptGroupCheckbox').forEach(function(checkbox) {
-          checkbox.checked = checkbox.dataset.groupId === group.id;
-        });
-
-        Array.from(optionsSelect.options).forEach(function(option) {
-          option.selected = group.departments.indexOf(option.value) !== -1;
-        });
-      }
-
-      function syncDepartmentGroupCheckboxes(optionsSelect, container) {
-        var selectedValues = Array.from(optionsSelect.selectedOptions).map(function(o) {
-          return o.value;
-        });
-
-        container.querySelectorAll('.deptGroupCheckbox').forEach(function(checkbox) {
-          var group = DEPARTMENT_GROUPS.filter(function(g) {
-            return g.id === checkbox.dataset.groupId;
-          })[0];
-
-          checkbox.checked = group.departments.length === selectedValues.length &&
-            group.departments.every(function(department) {
-              return selectedValues.indexOf(department) !== -1;
-            });
-        });
-      }
-
-      /**
        * Режим работы мультиселект-фильтра. Первый вариант выбран всегда
        * по умолчанию — при нем поведение полностью прежнее.
        */
@@ -1124,7 +1013,10 @@
        * так же, как в обычном режиме.
        */
       function updateReportNameState() {
-        var isMultiReport = countBatchReports() > 1;
+        // Пакетный режим ("отдельный отчет на каждое значение") относится
+        // только к обычному отчету — в режиме сравнения выборок его нет,
+        // поле названия остается доступным для подписи A/B.
+        var isMultiReport = !isCompareMode() && countBatchReports() > 1;
         var reportName = document.getElementById('reportName');
 
         reportName.disabled = isMultiReport;
@@ -1155,6 +1047,7 @@
 
           activeFilters.push({
             question: question.question,
+            dataTitle: question.dataTitle,
             type: question.type,
             operator: operator,
             value: Number(rawValue)
@@ -1173,6 +1066,7 @@
 
           activeFilters.push({
             question: question.question,
+            dataTitle: question.dataTitle,
             type: question.type,
             values: values,
             mode: document.querySelector('.filterMode:checked').value
@@ -1184,30 +1078,171 @@
 
       function resetFilters() {
         activeFilters = [];
+        sampleList = [];
         document.getElementById('dataSource').value = '2026';
+        document.getElementById('compareWith2025').checked = false;
+        document.getElementById('cohortOnly').checked = false;
+        document.getElementById('reportName').value = '';
         document.getElementById('surveyInfo').innerHTML = '';
         document.getElementById('surveyInfo').className = '';
         document.getElementById('filtersError').textContent = '';
         document.getElementById('filtersError').className = '';
         renderActiveFilters();
         updateCompareVisibility();
+        updateCohortVisibility();
+        updateCompareStageUI();
         loadFilterQuestions();
       }
 
       /**
-       * "Сравнить с 2025" доступно только для источника 2026.
-       * При переходе на 2025 сравнение принудительно выключается.
+       * "Сравнить с 2025" доступно только для источника 2026 и только
+       * в обычном режиме отчета — в режиме "Сравнить выборки" сравнение
+       * идет между A и B, а не с 2025, и блок скрывается всегда.
        */
       function updateCompareVisibility() {
-        var source = document.getElementById('dataSource').value;
         var compareBlock = document.getElementById('compareBlock');
         var compareCheckbox = document.getElementById('compareWith2025');
+
+        if (isCompareMode()) {
+          compareBlock.style.display = 'none';
+          compareCheckbox.checked = false;
+          return;
+        }
+
+        var source = document.getElementById('dataSource').value;
 
         if (source === '2026') {
           compareBlock.style.display = '';
         } else {
           compareBlock.style.display = 'none';
           compareCheckbox.checked = false;
+        }
+      }
+
+      /**
+       * Режим "Только сквозная когорта" доступен только для источника
+       * 2026 (когорта всегда строится ОТ 2026 к 2025) и только в обычном
+       * режиме отчета — в режиме "Сравнить выборки" когорты нет.
+       */
+      function updateCohortVisibility() {
+        var cohortBlock = document.getElementById('cohortBlock');
+        var cohortHint = document.getElementById('cohortHint');
+        var cohortCheckbox = document.getElementById('cohortOnly');
+
+        if (isCompareMode()) {
+          cohortBlock.style.display = 'none';
+          cohortHint.style.display = 'none';
+          cohortCheckbox.checked = false;
+          updateCompareLockState();
+          return;
+        }
+
+        var source = document.getElementById('dataSource').value;
+
+        if (source === '2026') {
+          cohortBlock.style.display = '';
+          cohortHint.style.display = '';
+        } else {
+          cohortBlock.style.display = 'none';
+          cohortHint.style.display = 'none';
+          cohortCheckbox.checked = false;
+        }
+
+        updateCompareLockState();
+      }
+
+      /**
+       * Подпись поля "Название..." и текст/доступность кнопки построения
+       * зависят от режима и (в режиме сравнения) от того, сколько выборок
+       * уже сохранено. Индикатор compareStageInfo объясняет, какая по
+       * счету выборка (A/B/C/D) сейчас редактируется и что уже сохранено.
+       */
+      function updateReportNameLabelForMode() {
+        var label = document.getElementById('reportNameLabel');
+
+        if (!isCompareMode()) {
+          label.textContent = 'Название отчета (необязательно)';
+          return;
+        }
+
+        label.textContent = 'Название выборки ' + currentSampleLetter() + ' (необязательно)';
+      }
+
+      function updateBuildButtonLabel() {
+        var btn = document.getElementById('buildReportBtn');
+
+        if (!isCompareMode()) {
+          btn.textContent = 'Создать отчет';
+          btn.disabled = false;
+          return;
+        }
+
+        // Итог отправки — sampleList + текущая редактируемая выборка,
+        // поэтому минимум для сравнения (2) достигается уже при
+        // sampleList.length === 1 (одна сохранена, одна редактируется).
+        var totalWithCurrent = sampleList.length + 1;
+        var canCompare = totalWithCurrent >= 2;
+
+        btn.textContent = canCompare
+          ? 'Сравнить выборки (' + totalWithCurrent + ')'
+          : 'Сначала сохраните выборку ' + currentSampleLetter();
+        btn.disabled = !canCompare;
+      }
+
+      function updateCompareStageUI() {
+        var info = document.getElementById('compareStageInfo');
+        var saveBtn = document.getElementById('saveSampleABtn');
+
+        if (!isCompareMode()) {
+          info.style.display = 'none';
+          saveBtn.style.display = 'none';
+          updateReportNameLabelForMode();
+          updateBuildButtonLabel();
+          return;
+        }
+
+        var canAddMore = sampleList.length < COMPARE_MAX_SAMPLES - 1;
+
+        info.style.display = '';
+        saveBtn.style.display = canAddMore ? '' : 'none';
+        saveBtn.textContent = 'Сохранить выборку ' + currentSampleLetter() + ' и добавить следующую →';
+
+        var savedSummary = sampleList.map(function(sample, index) {
+          return COMPARE_SAMPLE_LETTERS[index] + (sample.name ? ' («' + sample.name + '»)' : '');
+        }).join(', ');
+
+        var prefix = sampleList.length > 0 ? 'Сохранено: ' + savedSummary + '. ' : '';
+        var suffix = canAddMore
+          ? 'Нажмите «Сохранить и добавить следующую», чтобы добавить еще одну (максимум ' +
+            COMPARE_MAX_SAMPLES + '), или «Сравнить выборки», если этой достаточно.'
+          : 'Достигнут максимум выборок (' + COMPARE_MAX_SAMPLES + ') — нажмите «Сравнить выборки».';
+
+        info.textContent = prefix + 'Настраивается выборка ' + currentSampleLetter() + '. ' + suffix;
+
+        updateReportNameLabelForMode();
+        updateBuildButtonLabel();
+      }
+
+      function updateModeVisibility() {
+        updateCompareVisibility();
+        updateCohortVisibility();
+        updateCompareStageUI();
+      }
+
+      /**
+       * Включенная когорта требует сравнения с 2025 — "Сравнить с 2025"
+       * автоматически включается и блокируется от ручного выключения,
+       * пока когортный режим активен.
+       */
+      function updateCompareLockState() {
+        var compareCheckbox = document.getElementById('compareWith2025');
+        var cohortCheckbox = document.getElementById('cohortOnly');
+
+        if (cohortCheckbox.checked) {
+          compareCheckbox.checked = true;
+          compareCheckbox.disabled = true;
+        } else {
+          compareCheckbox.disabled = false;
         }
       }
 
@@ -1237,6 +1272,19 @@
       /**
        * Предпросмотр единственного отчета — прежний вид сайдбара.
        */
+      /**
+       * Строка про использованную когорту — только цифры (размер и
+       * отброшенные неоднозначные совпадения), без единого ФИО: состав
+       * когорты виден только на самом листе отчета (см. Cohort.roster).
+       */
+      function formatCohortInfoLine(report) {
+        if (!report.cohortOnly || !report.cohortInfo) return '';
+
+        return '<br><br><b>Использована сквозная когорта</b><br>' +
+          'Размер когорты: ' + report.cohortInfo.size + '<br>' +
+          'Отброшено неоднозначных совпадений: ' + report.cohortInfo.droppedDuplicates;
+      }
+
       function renderSingleResult(infoEl, source, report) {
         var filtersText = report.filters.length
           ? report.filters.map(formatFilterText).join('; ')
@@ -1251,11 +1299,21 @@
             report.summaryError + '</span>'
           : '';
 
+        var responseRateLine = report.headcount !== null && report.headcount !== undefined
+          ? 'Приглашены: ' + report.headcount + '<br>' +
+            (report.responseRatePercent !== null && report.responseRatePercent !== undefined
+              ? 'Явка: ' + report.responseRatePercent + '%' +
+                (report.responseRatePercent > 100 ? ' — проверьте численность' : '') + '<br>'
+              : '')
+          : '';
+
         infoEl.innerHTML =
           '<b>Предпросмотр выборки</b><br><br>' +
           'Источник: ' + source + '<br>' +
-          'Количество сотрудников: ' + report.employees + '<br><br>' +
+          'Количество сотрудников: ' + report.employees + '<br>' +
+          responseRateLine + '<br>' +
           'Фильтры: ' + filtersText +
+          formatCohortInfoLine(report) +
           summaryWarning;
       }
 
@@ -1294,8 +1352,19 @@
             ? ''
             : ' → лист "' + report.sheetName + '"';
 
+          var coverageText = report.responseRatePercent !== null && report.responseRatePercent !== undefined
+            ? ', явка ' + report.responseRatePercent + '%' +
+              (report.responseRatePercent > 100 ? ' ⚠' : '')
+            : '';
           line.textContent = '✓ ' + report.label +
-            ' (' + report.employees + ')' + sheetSuffix;
+            ' (' + report.employees + coverageText + ')' + sheetSuffix;
+
+          if (report.cohortOnly && report.cohortInfo) {
+            var cohortNote = document.createElement('span');
+            cohortNote.textContent = ' — когорта: ' + report.cohortInfo.size +
+              ', отброшено неоднозначных: ' + report.cohortInfo.droppedDuplicates;
+            line.appendChild(cohortNote);
+          }
 
           if (report.summaryError) {
             line.title = 'Сводная аналитика не обновлена: ' + report.summaryError;
@@ -1310,20 +1379,82 @@
         });
       }
 
+      /**
+       * Итог сравнения 2-4 выборок — по аналогии с renderSingleResult, но
+       * без размера явки/когорты (не считается для сравнения выборок).
+       */
+      function renderCompareResult(infoEl, result) {
+        var lines = result.labels.map(function(label, index) {
+          return 'Выборка ' + COMPARE_SAMPLE_LETTERS[index] + ' (' + label + '): ' + result.employees[index];
+        }).join('<br>');
+
+        infoEl.innerHTML =
+          '<b>Сравнение построено</b><br><br>' +
+          'Лист: ' + result.sheetName + '<br>' +
+          lines;
+      }
+
       document.getElementById('questionSelect').addEventListener('change', renderFilterEditor);
       document.getElementById('addFilterBtn').addEventListener('click', addFilterFromEditor);
       document.getElementById('resetFiltersBtn').addEventListener('click', resetFilters);
       document.getElementById('dataSource').addEventListener('change', function() {
         updateCompareVisibility();
+        updateCohortVisibility();
         loadFilterQuestions();
+      });
+      document.getElementById('cohortOnly').addEventListener('change', updateCompareLockState);
+      document.getElementById('workMode').addEventListener('change', function() {
+        resetFilters();
+        updateModeVisibility();
+      });
+
+      document.getElementById('saveSampleABtn').addEventListener('click', function() {
+        if (sampleList.length >= COMPARE_MAX_SAMPLES - 1) return;
+        sampleList.push({
+          filters: activeFilters.slice(),
+          name: document.getElementById('reportName').value.trim()
+        });
+        activeFilters = [];
+        document.getElementById('reportName').value = '';
+        renderActiveFilters();
+        updateCompareStageUI();
       });
 
       document.getElementById('buildReportBtn').addEventListener('click', function () {
 
         var source = document.getElementById('dataSource').value;
-        var compareWith2025 = document.getElementById('compareWith2025').checked;
-        var customReportName = document.getElementById('reportName').value;
         var infoEl = document.getElementById('surveyInfo');
+
+        if (isCompareMode()) {
+
+          if (sampleList.length + 1 < 2) return;
+
+          var currentName = document.getElementById('reportName').value;
+          var allSamples = sampleList.concat([{ filters: activeFilters, name: currentName }]);
+          var filtersList = allSamples.map(function(sample) { return sample.filters; });
+          var namesList = allSamples.map(function(sample) { return sample.name; });
+
+          infoEl.className = '';
+          infoEl.textContent = 'Сравнение выборок (' + allSamples.length + ')...';
+
+          google.script.run
+            .withSuccessHandler(function(result) {
+              infoEl.className = '';
+              renderCompareResult(infoEl, result);
+            })
+            .withFailureHandler(function(error) {
+              infoEl.className = 'error';
+              infoEl.textContent = error.message;
+            })
+            .compareSamplesFromSidebar(source, filtersList, namesList);
+
+          return;
+
+        }
+
+        var compareWith2025 = document.getElementById('compareWith2025').checked;
+        var cohortOnly = document.getElementById('cohortOnly').checked;
+        var customReportName = document.getElementById('reportName').value;
         var batchCount = countBatchReports();
         infoEl.className = '';
         infoEl.textContent = batchCount > 1
@@ -1344,7 +1475,7 @@
             infoEl.className = 'error';
             infoEl.textContent = error.message;
           })
-          .buildReportFromSidebar(source, activeFilters, compareWith2025, customReportName);
+          .buildReportFromSidebar(source, activeFilters, compareWith2025, customReportName, cohortOnly);
 
       });
 
@@ -1370,7 +1501,7 @@
           .getSurveyInfo(source);
       });
 
-      updateCompareVisibility();
+      updateModeVisibility();
       loadFilterQuestions();
     </script>
   </body>

@@ -17,16 +17,18 @@ function getSurveyInfo(source) {
  * по количеству ответов в данных выбранного источника.
  */
 function getFilterableQuestions(source) {
-  var survey = loadSurveyData(source || '2026', true);
+  var resolvedSource = source || '2026';
+  var survey = loadEnrichedSurveyData_(resolvedSource, true);
 
-  return Filters.getFilterableQuestions().map(function(question) {
+  return Filters.getFilterableQuestions(resolvedSource).map(function(question) {
     var isOperatorType = question.type === 'rating5' || question.type === 'enps';
 
     return {
       question: question.title,
+      dataTitle: question.dataTitle || null,
       type: question.type,
       operators: isOperatorType ? Filters.operators : null,
-      options: isOperatorType ? null : Filters.getValueOptions(question, survey.headers, survey.data)
+      options: isOperatorType ? null : Filters.getValueOptions(question, survey.headers, survey.data, resolvedSource)
     };
   });
 }
@@ -39,6 +41,17 @@ function getFilterableQuestions(source) {
  * на значение (см. BatchReports). Во всех остальных случаях, как и
  * раньше, строится ровно один отчет.
  */
-function buildReportFromSidebar(source, filters, compareWith2025, customReportName) {
-  return BatchReports.run(source, filters, compareWith2025, customReportName);
+function buildReportFromSidebar(source, filters, compareWith2025, customReportName, cohortOnly) {
+  ensureChangeTrigger_();
+  return BatchReports.run(source, filters, compareWith2025, customReportName, cohortOnly);
+}
+
+/**
+ * Сравнить 2-4 произвольные выборки (наборы фильтров) одного источника —
+ * см. SampleComparisonService.compareMany. filtersList/namesList — массивы
+ * одинаковой длины (2-4 элемента), без пакетного режима BatchReports.
+ */
+function compareSamplesFromSidebar(source, filtersList, namesList) {
+  ensureChangeTrigger_();
+  return SampleComparisonService.compareMany(source, filtersList, namesList);
 }
